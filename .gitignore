@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+#  MR LiQ Repost Bot — runtime data & downloaded models
+# ============================================================
+# Runtime data (SQLite DB, logs, watermark templates) — may contain the bot token/settings
+data/*
+!data/.gitkeep
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Downloaded AI model weights (Real-ESRGAN / LaMa, hundreds of MB)
+models/
+
+# Local scratch / debugging workspace
+scratchpad/
+
+# Deliverable archives
+*.zip

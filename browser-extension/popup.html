@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="" width="24" height="24">
+    <h1>آپلودگرام</h1>
+    <span id="statusDot" class="dot dot-unknown" title="وضعیتِ اتصال"></span>
+  </header>
+
+  <section class="field">
+    <label for="serverUrl">آدرسِ سرور</label>
+    <input id="serverUrl" placeholder="http://1.2.3.4:8843" dir="ltr" autocomplete="off">
+  </section>
+
+  <section class="field">
+    <label for="token">توکن</label>
+    <div class="input-with-btn">
+      <input id="token" type="password" placeholder="توکن از منویِ «منابع اکستنشن» تو ربات" dir="ltr" autocomplete="off">
+      <button id="toggleToken" class="icon-btn" type="button" title="نمایش/مخفی‌کردنِ توکن">👁</button>
+    </div>
+  </section>
+
+  <div class="row">
+    <button id="save" class="primary">ذخیره</button>
+    <button id="testBtn">تستِ اتصال</button>
+  </div>
+
+  <div id="statusBox" class="status-box"></div>
+
+  <section class="toggle-row">
+    <label class="switch">
+      <input type="checkbox" id="fullQuality" checked>
+      <span class="slider"></span>
+    </label>
+    <div class="toggle-label">
+      <b>کیفیتِ کامل</b>
+      <span class="hint">گرفتنِ نسخه‌ی اصلیِ عکس/ویدیو (کندتر، ولی دقیق). خاموش‌کردنش سریع‌تره ولی از نسخه‌ی فشرده استفاده می‌کنه.</span>
+    </div>
+  </section>
+
+  <section id="sourcesSection" class="sources-section hidden">
+    <div class="sources-header">
+      <span>گروه‌های شناسایی‌شده</span>
+      <button id="refreshSources" class="icon-btn" title="به‌روزرسانی">⟳</button>
+    </div>
+    <ul id="sourcesList" class="sources-list"></ul>
+  </section>
+
+  <footer>
+    <a href="options.html" target="_blank" rel="noopener">راهنما و تنظیماتِ پیشرفته</a>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

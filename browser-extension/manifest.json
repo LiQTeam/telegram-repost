@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "آپلودگرام - اتصال گروه‌های تلگرام",
+  "short_name": "UploadGram Connector",
+  "version": "2.0.0",
+  "description": "اتصالِ امن و پایدارِ گروه‌ها/کانال‌های خصوصیِ بازِ تلگرام‌وب به ربات ری‌پست آپلودگرام، با نمایشِ زنده‌ی وضعیتِ اتصال و صف‌بندیِ خودکار در صورتِ قطعیِ شبکه.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage", "scripting", "activeTab", "alarms", "notifications"],
+  "host_permissions": [
+    "https://web.telegram.org/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.telegram.org/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "آپلودگرام - وضعیتِ اتصال",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "minimum_chrome_version": "110"
+}

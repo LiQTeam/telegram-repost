@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head>
+<meta charset="UTF-8">
+<title>راهنمای آپلودگرام کانکتور</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Tahoma, sans-serif;
+    max-width: 640px;
+    margin: 32px auto;
+    padding: 0 20px;
+    background: #0f1a22;
+    color: #eaeaea;
+    line-height: 1.9;
+  }
+  h1 { color: #64b5ef; font-size: 20px; }
+  h2 { color: #a8d0f0; font-size: 15px; margin-top: 28px; }
+  code {
+    background: #17212b;
+    padding: 2px 6px;
+    border-radius: 4px;
+    direction: ltr;
+    display: inline-block;
+    font-size: 13px;
+  }
+  pre {
+    background: #17212b;
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+    direction: ltr;
+    text-align: left;
+  }
+  ol, ul { padding-inline-start: 22px; }
+  .warn {
+    background: #2a2013;
+    border: 1px solid #6b5320;
+    color: #e0c47a;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <h1>🧩 آپلودگرام کانکتور - راهنما</h1>
+  <p>این اکستنشن، گروه/کانال‌های خصوصیِ بازِ تلگرام‌وب رو (که با اسکرپِ عمومیِ
+     <code>t.me/s/username</code> قابل‌دسترسی نیستن) به ربات ری‌پستِ آپلودگرام
+     وصل می‌کنه.</p>
+
+  <h2>۱. راه‌اندازیِ سمتِ سرور</h2>
+  <p>توی فایلِ <code>.env</code> ربات:</p>
+  <pre>EXTENSION_API_ENABLED=true
+EXTENSION_API_PORT=8843
+EXTENSION_API_TOKEN=&lt;یک توکنِ تصادفیِ طولانی&gt;</pre>
+  <p>یه توکنِ تصادفی می‌تونی این‌طوری بسازی: <code>openssl rand -hex 32</code></p>
+
+  <div class="warn">
+    ⚠️ چون این سرور بدونِ SSL/HTTPS روی HTTPِ ساده اجرا میشه، حتماً پورتِ
+    بالا رو توی فایروال فقط برای IPِ خودت (یا یک VPN) باز کن، نه برایِ کلِ
+    اینترنت.
+  </div>
+
+  <h2>۲. تنظیمِ اکستنشن</h2>
+  <ol>
+    <li>روی آیکونِ اکستنشن کلیک کن</li>
+    <li><b>آدرسِ سرور</b> رو وارد کن: مثلاً <code>http://1.2.3.4:8843</code></li>
+    <li><b>توکن</b> رو (همونی که توی <code>.env</code> گذاشتی) وارد کن</li>
+    <li>«ذخیره» رو بزن، بعد «تستِ اتصال» رو بزن تا مطمئن بشی سرور و توکن هردو درستن</li>
+  </ol>
+
+  <h2>۳. فعال‌سازیِ یک گروه</h2>
+  <p>یک تبِ تلگرام‌وب رو روی گروه/کانالِ موردنظر باز نگه‌دار. بعد از چند
+     ثانیه، اسمِ اون چت توی لیستِ «گروه‌های شناسایی‌شده» در پاپ‌آپ ظاهر
+     میشه (با وضعیتِ «در انتظارِ تایید»). برای فعال‌کردنش، از داخلِ خودِ
+     ربات (منویِ «منابع اکستنشن») روش تایید بزن.</p>
+
+  <h2>کیفیتِ کامل چیه؟</h2>
+  <p>وقتی روشنه، اکستنشن با کلیک روی هر عکس/ویدیو، نسخه‌ی اصلی/باکیفیت رو
+     می‌گیره (کمی کندتر و قابل‌مشاهده روی صفحه). وقتی خاموشه، فقط از
+     تامبنیلِ فشرده‌ی داخلِ حباب استفاده می‌کنه (سریع‌تر، کیفیتِ پایین‌تر).</p>
+
+  <h2>عیب‌یابی</h2>
+  <ul>
+    <li><b>«سرور در دسترس نیست»</b> - آدرس/پورت رو چک کن، فایروال رو چک کن،
+        مطمئن شو <code>EXTENSION_API_ENABLED=true</code> است و ربات ری‌استارت شده.</li>
+    <li><b>«توکن اشتباهه»</b> - توکنِ داخلِ پاپ‌آپ باید دقیقاً همونی باشه که
+        در <code>.env</code> ربات (<code>EXTENSION_API_TOKEN</code>) نوشتی.</li>
+    <li><b>پستی گزارش نمیشه</b> - گروه باید هم توی پاپ‌آپ «شناسایی‌شده» و هم
+        توی ربات «فعال» شده باشه؛ تبِ تلگرام‌وبِ اون گروه هم باید باز بمونه.</li>
+  </ul>
+</body>
+</html>
