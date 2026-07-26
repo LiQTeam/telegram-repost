@@ -1,0 +1,185 @@
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "Segoe UI", Tahoma, sans-serif;
+  width: 320px;
+  margin: 0;
+  padding: 14px;
+  background: #17212b;
+  color: #eaeaea;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+header h1 {
+  font-size: 15px;
+  margin: 0;
+  color: #64b5ef;
+  flex: 1;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-ok { background: #3ecf5f; box-shadow: 0 0 6px #3ecf5f88; }
+.dot-err { background: #e5645a; box-shadow: 0 0 6px #e5645a88; }
+.dot-unknown { background: #6c7a86; }
+
+.field { margin-bottom: 10px; }
+label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #a8b6c1;
+}
+
+input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #2b3947;
+  background: #0f1a22;
+  color: #eaeaea;
+  font-size: 13px;
+}
+input:focus {
+  outline: none;
+  border-color: #4894d4;
+}
+
+.input-with-btn {
+  display: flex;
+  gap: 6px;
+}
+.input-with-btn input { flex: 1; }
+
+.icon-btn {
+  width: 34px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid #2b3947;
+  background: #0f1a22;
+  color: #eaeaea;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.icon-btn:hover { background: #17222c; }
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+button {
+  padding: 9px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #2b3947;
+  color: #eaeaea;
+  font-size: 13px;
+  cursor: pointer;
+  flex: 1;
+}
+button:hover { background: #344656; }
+button.primary { background: #2b5278; color: #fff; }
+button.primary:hover { background: #35638f; }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.status-box {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  min-height: 16px;
+}
+.status-box .ok { color: #6fcf67; }
+.status-box .err { color: #e5645a; }
+.status-box .muted { color: #6c7a86; }
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #22303c;
+}
+.toggle-label b { font-size: 12px; display: block; margin-bottom: 2px; }
+.toggle-label .hint { font-size: 11px; color: #6c7a86; line-height: 1.5; }
+
+.switch { position: relative; display: inline-block; width: 38px; height: 21px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background-color: #2b3947; border-radius: 21px; transition: .15s;
+}
+.slider::before {
+  position: absolute; content: ""; height: 15px; width: 15px; left: 3px; bottom: 3px;
+  background-color: #eaeaea; border-radius: 50%; transition: .15s;
+}
+input:checked + .slider { background-color: #2b5278; }
+input:checked + .slider::before { transform: translateX(-17px); }
+
+.sources-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #22303c;
+}
+.sources-section.hidden { display: none; }
+.sources-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #a8b6c1;
+  margin-bottom: 6px;
+}
+.sources-header .icon-btn { width: 26px; height: 26px; font-size: 13px; }
+
+.sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.sources-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  font-size: 12px;
+  border-bottom: 1px solid #1c2833;
+}
+.sources-list li:last-child { border-bottom: none; }
+.src-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.src-dot.active { background: #3ecf5f; }
+.src-dot.pending { background: #d8a93a; }
+.src-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-tag { font-size: 10px; color: #6c7a86; }
+
+.empty-hint {
+  font-size: 11px;
+  color: #6c7a86;
+  text-align: center;
+  padding: 8px 0;
+}
+
+footer {
+  margin-top: 12px;
+  text-align: center;
+}
+footer a {
+  font-size: 11px;
+  color: #64b5ef;
+  text-decoration: none;
+}
+footer a:hover { text-decoration: underline; }
