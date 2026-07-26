@@ -1,212 +1,368 @@
+<a id="top"></a>
+
 <div align="center">
 
-[فارسی](README.md) | **English**
+🇮🇷 [فارسی](README.md) | 🇬🇧 **English** | 🇷🇺 [Русский](README.ru_RU.md) | 🇨🇳 [中文](README.zh_CN.md)
 
-<img src="assets/banner.png" alt="MR LiQ — Smart Telegram Repost Bot" width="100%" />
+<img src="assets/banner.png" alt="Messrs LiQ — Smart Telegram Repost Bot" width="100%" />
 
-[![Release](https://img.shields.io/badge/release-v2.1.2-brightgreen.svg)](CHANGELOG.md)
-[![Build](https://img.shields.io/badge/build-passing-success.svg)](tests/)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Made with ❤️ in Iran](https://img.shields.io/badge/Made%20with%20%E2%9D%A4%EF%B8%8F%20in-Iran-239f40.svg)](#)
+<h3>Smart reposting, AI image processing, and complete Telegram channel automation — all from inside the bot.</h3>
+
+[![Release](https://img.shields.io/badge/release-v2.1.2-2ea44f?style=flat-square)](CHANGELOG.md)
+[![Build](https://img.shields.io/badge/build-passing-success?style=flat-square)](tests/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot%20API%2021.6-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![AI Powered](https://img.shields.io/badge/AI-LaMa%20%2B%20Real--ESRGAN-8A2BE2?style=flat-square)](#architecture)
+[![Browser Extension](https://img.shields.io/badge/Browser-Extension%20(MV3)-FF7139?style=flat-square&logo=googlechrome&logoColor=white)](browser-extension/)
+[![Maintained](https://img.shields.io/badge/maintained-yes-brightgreen?style=flat-square)](https://github.com/LiQTeam/telegram-repost/commits)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4?style=flat-square)](CONTRIBUTING.md)
+[![Made in Iran](https://img.shields.io/badge/Made%20with%20%E2%9D%A4%EF%B8%8F%20in-Iran-239f40?style=flat-square)](#)
 
 </div>
 
-A smart Telegram repost bot (Python) with a complete admin panel **inside the bot itself**: multiple source and destination channels with arbitrary mapping between them, a seven-slot hourly schedule per source channel (Tehran time), graphical watermarks on images, AI-based quality enhancement and watermark removal, and an approve-before-send queue. This is a full rewrite of the previous PHP panel — instead of a separate web panel, everything is controlled through inline glass buttons inside the bot, and the original message formatting (bold/italic/links/…) is preserved (not just raw text like the old PHP version).
+---
+
+<a id="introduction"></a>
+
+## 📖 Introduction
+
+**A complete Telegram channel automation engine — not just a "copy-paste" bot.**
+
+Messrs LiQ (internally MR LiQ) is a smart Python Telegram repost bot that reads posts from source channels, processes and cleans them (watermarks, AI quality enhancement, link/ad removal), and delivers them to destination channels on your schedule — with every setting controlled from inside the bot via inline glass buttons, no separate web panel required.
+
+It is a full rewrite of a previous PHP panel, but its difference from a simple repost bot is fundamental: instead of merely forwarding text, it **preserves the original post formatting** (bold/italic/links/spoilers), runs images through an **AI-based image pipeline** (previous-watermark removal with the LaMa model and quality enhancement with Real-ESRGAN), **automatically filters** ad and duplicate posts, and offers an **approve-before-send queue** that lets you review and edit each post before it goes live.
+
+Because the source is Telegram's public web preview (`t.me/s/username`), the bot works with just a bot token and needs no Telegram session or API ID (MTProto) — meaning simple, safe setup, at the cost of source channels needing to be public. For private channels, a **browser extension** is included that reads content from your own logged-in Telegram Web tab.
+
+<a id="toc"></a>
+
+## 📑 Table of Contents
+
+| | |
+|---|---|
+| 📖 [Introduction](#introduction) | 🖼 [Screenshots](#screenshots) |
+| ⚠️ [Important](#important) | 🚀 [Quick Start](#quick-start) |
+| ✨ [Features](#features) | ⚙️ [Configuration](#configuration) |
+| 🏗 [Architecture](#architecture) | 🖥 [Requirements](#requirements) |
+| 📦 [Project Structure](#structure) | ⚠️ [Known Limitations](#limitations) |
+| 🌐 [Languages & Fonts](#languages) | 🤝 [Contributing](#contributing) |
+| 📄 [License](#license) | ⭐ [Support](#support) |
+
+<a id="important"></a>
+
+## ⚠️ Important (read before installing)
 
 > [!IMPORTANT]
-> Posts are read from Telegram's **public web preview** (`t.me/s/username`), so every **source channel must be public**. This project is not a full Userbot/MTProto client; that's why it needs no Telegram session or API ID and works with just a bot token — but as a result, "instant" mode happens with up to a 30-second delay (the bot's polling interval), not exactly at publish time.
+> - **Source channels must be public.** The source is read from the public `t.me/s/username` preview page. For private channels/groups, use the **browser extension**.
+> - **This is not a Userbot/MTProto client.** It works with just a bot token; therefore "instant" mode happens with up to a 30-second delay (the bot's polling interval), not exactly at publish time.
+> - **AI features are optional.** Watermark removal (LaMa) and quality enhancement (Real-ESRGAN) need model files (~220MB) and `torch`. Without them the bot runs fully and only these two features are gracefully disabled.
+> - **The ad filter's AI adjudication and image generation need API keys** (Mistral/Groq and Pollinations/DeepAI/Stable Horde). Without keys, the filter falls back to its local logic (keywords/links/mentions).
+> - **Do not expose the extension API to the open internet.** The token travels as plain text; enable it only behind a firewall or on a trusted network.
+> - **AI image processing is CPU-heavy.** On small VPSes, keep `MAX_CONCURRENT_HEAVY_JOBS` low.
+
+<a id="features"></a>
 
 ## ✨ Features
 
-- **Multiple source & destination channels** — any number of public source channels and destinations, each independently toggleable.
-- **Arbitrary source ↔ destination mapping** — one source can fan out to many destinations, and one destination can receive from many sources.
-- **Seven-slot hourly schedule** — each source channel has seven independent hourly slots (Tehran time), each separately toggleable and re-timeable.
-- **Three send modes** — seven-slot schedule, instant (30s polling), or interval (every N minutes); chosen per source channel.
-- **Approve before send** — a final preview of each post with ✅ approve / ✏️ edit caption / 🖼 replace photo / ❌ reject, before it reaches the destination.
-- **Independent graphical watermark** — separate watermarks for Telegram and Instagram, with fully configurable text/position/gradient color/opacity/size and a live preview.
-- **AI watermark removal** — detection via Template Matching and corner heuristics, then inpainting with the **LaMa** model (with automatic fallback to OpenCV inpaint).
-- **AI image quality enhancement** — sharpen/upscale low-quality images with the lightweight `SRVGGNetCompact` model (Real-ESRGAN family), tuned for CPU.
-- **Formatting preservation + smart cleanup** — carries over bold/italic/links/spoilers, plus automatic removal of the source channel's links/mentions/phone numbers and a linked signature at the end of each post.
-- **Automatic ad-post filter** — detection by keywords, link/mention counts and collection mode; with reject or send-for-manual-review options (+ optional AI adjudication).
-- **Full in-bot admin panel** — every setting via inline glass buttons with meaningful colors (Bot API 9.4), no separate web panel needed.
-- **"News & Prices" module** — an isolated subsystem for auto-publishing prices, scheduled ads, and news (with an admin approval queue).
-- **Browser extension** — connect open private Telegram Web groups/channels to the bot via a local API.
-- **Encrypted backups** — safe database backup with a per-table SAVEPOINT and encryption.
-- **One-click VPS install** — the `install.sh` script sets up the virtualenv, dependencies, `.env` file, and a systemd service automatically.
+Every feature below is drawn straight from the source, with the relevant module(s) named.
 
-## 📸 Screenshots
+### 📡 Channel Management
+- **Multiple source & destination channels** — any number of public sources and destinations, each independently toggleable. `database.py`
+- **Arbitrary source ↔ destination mapping** — one source to many destinations, one destination from many sources; full fan-out. `scheduler.py`
+- **Custom channel names** — a readable label in lists instead of the raw username. `handlers/inputs.py`
 
-<details>
-<summary>Click to expand</summary>
+### ⏱ Scheduling & Delivery
+- **Seven-slot hourly schedule** — each source has seven independent slots (Tehran time), each separately toggleable and re-timeable. `scheduler.py`
+- **Three send modes** — seven-slot schedule, instant (30s polling), or interval (every N minutes); exactly one is active per source. `scheduler.py`
+- **Downtime catch-up** — if the bot was down when a slot was due, it sends the pending post once as soon as it comes back. `scheduler.py`
+- **Instant send of the last 10/20/30 posts** — grab a channel's latest posts and dispatch them under that channel's approval rule. `manual_poster.py`
+- **Smart scheduling (experimental)** — analyzes stats and suggests the best time (limited by Bot API data). `smart_scheduler.py`
 
-<!-- Add bot panel screenshots here -->
-<!-- e.g.
-<img src="docs/screenshots/main-menu.png" width="320" />
-<img src="docs/screenshots/watermark.png" width="320" />
--->
+### 🛡 Content Approval
+- **Approve-before-send queue** — a final preview of each post with four buttons: **✅ Approve & send**, **✏️ Edit caption**, **🖼 Replace photo**, **❌ Reject**. `poster.py`
+- **Per-user dedicated approval channel** — each operator can have their own approval queue in a separate channel/group. `cli.py add-user`
 
-</details>
+### 🖼 Image Processing
+- **AI image quality enhancement** — sharpen/upscale low-quality images with `SRVGGNetCompact` (Real-ESRGAN family, reimplemented standalone on raw torch, no `basicsr`), CPU-tuned. `sr_model.py`
+- **Processing router with controlled concurrency** — all heavy work runs on a separate thread under a semaphore. `image_router.py` · `concurrency.py`
 
-## 🚀 Quick Start
+### 🎨 Watermark System
+- **Independent graphical watermarks for Telegram & Instagram** — text, 6 positions, solid/gradient color from 10 presets, opacity, font size, edge margin, and a live preview. `custom_watermark.py` · `watermark.py`
+- **Owner-driven, fully configurable from inside the bot** — no code edits. `button_config.py`
 
-One-line install on a Linux server (Ubuntu / Debian / CentOS):
+### 🤖 AI Pipeline
+- **AI watermark removal** — detection via Template Matching (`data/watermark_templates/`) and corner heuristics, then local inpainting with the **LaMa** model (TorchScript, `torch.jit`), with **automatic fallback to `cv2.inpaint`** if the model is missing or errors. `ai_watermark.py` · `lama_model.py`
+- **AI text-adjudication router** — auto-selects between **Mistral** and **Groq** by text length/type. `ai_router.py`
+- **Image generation with a failover chain** — Pollinations → DeepAI → Stable Horde; errors/timeouts/rate-limits auto-switch to the next provider. `image_router.py`
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/LiQTeam/telegram-repost/main/install.sh | sudo bash
-```
+### 🧠 Smart Filtering
+- **Ad-post filter (v3 engine)** — context-aware analysis by keywords, link/mention counts, collection mode, and VPN/proxy config-file detection, plus **optional per-post AI adjudication**; action is "reject" or "send for manual review." `ad_filter.py`
+- **Duplicate-post filter** — exact (hash) matching plus a **fuzzy** layer for the same news carried with different marks/signatures across sources. `duplicate_filter.py`
+- **Formatting preservation + smart cleanup** — carries over Telegram-safe HTML and removes the source channel's links/mentions/phone numbers, plus a linked end-of-post signature. `formatter.py`
+- **Filter feedback report (+ Excel export)** — filter performance stats and details as a downloadable two-sheet workbook. `ad_feedback_report.py`
 
-> Prefer to clone the repo manually:
-> ```bash
-> git clone https://github.com/LiQTeam/telegram-repost.git
-> cd telegram-repost
-> sudo bash install.sh
-> ```
+### 📰 Auto-Publishing (isolated module)
+- **News, prices & ads** — a fully separate subsystem with its own database (`auto_poster.db`): automatic price publishing (fiat/crypto/gold/markets), scheduled ads with glass buttons, and news with an admin approval queue. `bot/auto_poster/`
 
-The installer is **interactive** and prompts you for these values at runtime:
+### 🛠 Operations & Resilience
+- **Encrypted backup & full restore** — password-protected backups, send-to-channel, and restore with a per-table SAVEPOINT. `backup_manager.py`
+- **Download cache** — temporary file retention with TTL and count/byte caps. `cache.py`
+- **Resource monitor** — live CPU/RAM/disk monitoring with automatic alerts. `resource_monitor.py`
+- **Notification manager** — routes admin notifications to a separate private channel. `notification_manager.py`
+- **Public report channel** — transparent success reports, inactivity warnings (tagging the responsible operator) and threaded thank-yous. `public_report_channel.py`
 
-1. **Bot token** (from [@BotFather](https://t.me/BotFather))
-2. **Admin numeric ID(s)** (from [@userinfobot](https://t.me/userinfobot)) — comma-separate multiple admins
-3. **Default destination channel ID** (optional — leave empty and add any number of destinations later from inside the bot)
-4. **Mistral / Groq API keys** (optional — for the ad filter's AI adjudication)
+### 🌐 Browser Extension
+- **Telegram Web connector (Chrome MV3)** — reads content from an open private group/channel in your logged-in tab and sends it to the bot via a local API (`aiohttp`), with a live connection-status view and queueing during network outages. `browser-extension/` · `extension_api.py`
 
-It then installs prerequisites, creates a virtualenv, installs the libraries, writes the `.env` file, and runs the bot as a **systemd** service (always-on + auto-restart). The default timezone is `Asia/Tehran`.
+### 🖥 Panel, CLI & Tools
+- **Full in-bot panel** — colored inline buttons (Bot API 9.4: blue/green/red, injected via `api_kwargs`), meaningful and time-window-aware coloring. `button_style.py` · `button_config.py`
+- **Command-line tool (CLI)** — `add-source`, `add-destination`, `add-user`, `list-sources`, `list-destinations`, `stats`, `backup`. `cli.py`
+- **Jalali (Persian) calendar** — full Persian date/time rendering. `jdatetime_utils.py`
 
-After install, send `/start` to the bot in Telegram. To change `.env` values manually, restart the service afterward:
-
-```bash
-nano .env
-systemctl restart mrliq-bot      # apply changes
-systemctl status  mrliq-bot      # status
-journalctl -u mrliq-bot -f       # live logs
-```
-
-> **Persian font (for watermarks):** the `Vazirmatn` fonts ship inside the `fonts/` folder; to use a different font, drop its `.ttf` into that folder and restart the service.
-
-## ⚙️ Configuration
-
-All variables are read from the `.env` file (sample: [`.env.example`](.env.example)). Only `BOT_TOKEN` and `ADMIN_IDS` are required; everything else has a safe default.
-
-| Variable | Default | Description |
-|---|---|---|
-| `BOT_TOKEN` | — | **(required)** Bot token from @BotFather |
-| `ADMIN_IDS` | — | **(required)** Admin numeric IDs, comma-separated |
-| `TARGET_CHAT_ID` | — | Default destination channel ID (optional) |
-| `DB_PATH` | `data/bot.sqlite` | SQLite database path |
-| `TIMEZONE` | `Asia/Tehran` | Timezone used for schedule calculations |
-| `MAX_CONCURRENT_HEAVY_JOBS` | `3` | Max images processed concurrently (watermark/AI) |
-| `DOWNLOAD_CACHE_MAX_ITEMS` | `200` | Max items in the download cache |
-| `DOWNLOAD_CACHE_TTL_SECONDS` | `1800` | Cache item retention (seconds) |
-| `DOWNLOAD_CACHE_MAX_BYTES` | `157286400` | Total download-cache cap (bytes, 150MB) |
-| `MAX_DOWNLOAD_BYTES` | `62914560` | Per-file download cap (bytes, 60MB) |
-| `AD_FILTER_CACHE_MAX_ITEMS` | `2000` | Max items in the ad-filter AI-result cache |
-| `AD_FILTER_CACHE_TTL_SECONDS` | `21600` | Ad-filter cache TTL (seconds) |
-| `TEMPLATE_MATCH_THRESHOLD` | `0.75` | Template-match threshold for watermark detection |
-| `MAX_WATERMARK_AREA_RATIO` | `0.3` | Max area ratio of an inpaintable watermark region |
-| `MISTRAL_API_KEY` | — | Mistral key (optional, AI adjudication) |
-| `GROQ_API_KEY` | — | Groq key (optional, AI adjudication) |
-| `POLLINATIONS_API_KEY` | — | Pollinations image-gen key (optional) |
-| `DEEPAI_API_KEY` | — | DeepAI image-gen key (optional) |
-| `STABLEHORDE_API_KEY` | — | Stable Horde image-gen key (optional) |
-| `IMAGE_GEN_TIMEOUT` | `30` | Image generation timeout (seconds) |
-| `IMAGE_GEN_MAX_RETRIES` | `2` | Max image-generation retries |
-| `STABLEHORDE_POLL_TIMEOUT` | `180` | Stable Horde poll timeout |
-| `STABLEHORDE_POLL_INTERVAL` | `5` | Stable Horde poll interval (seconds) |
-| `EXTENSION_API_ENABLED` | `false` | Enable the browser-extension API |
-| `EXTENSION_API_HOST` | `0.0.0.0` | Extension API host |
-| `EXTENSION_API_PORT` | `8843` | Extension API port |
-| `EXTENSION_API_TOKEN` | — | Shared bot ↔ extension token (behind a firewall) |
+<a id="architecture"></a>
 
 ## 🏗 Architecture
 
 The path of a single post from source to destination:
 
 ```mermaid
-flowchart LR
-    A["Source channel (public)<br/>t.me/s/username"] -->|scraper.py| B["Extract post<br/>text / photo / video"]
-    B --> C{"Filters<br/>ads · duplicate · length"}
-    C -->|rejected| X["Skipped"]
-    C -->|pass| D["Image processing<br/>AI watermark removal · enhance · watermark"]
-    D --> E{"Approve before send?"}
-    E -->|on| F["Admin approval queue<br/>✅ / ✏️ / 🖼 / ❌"]
-    E -->|off| G["Send to destination(s)"]
-    F -->|approve| G
+flowchart TD
+    subgraph SRC["Sources"]
+        A["Public source channel<br/>t.me/s/username"]
+        EXT["Browser extension<br/>(private group/channel)"]
+    end
+    A -->|scraper.py| P["Extract post<br/>text / photo / video"]
+    EXT -->|extension_api.py| P
+    P --> F{"Filters<br/>ad_filter · duplicate_filter"}
+    F -->|ad/duplicate| X["Reject / manual review"]
+    F -->|pass| IMG["Image processing<br/>watermark removal (LaMa→OpenCV)<br/>quality enhance (Real-ESRGAN)<br/>Telegram/Instagram watermark"]
+    IMG --> FMT["formatter.py<br/>preserve format + cleanup + signature"]
+    FMT --> Q{"Approve before send?"}
+    Q -->|on| REV["Admin approval queue<br/>✅ / ✏️ / 🖼 / ❌"]
+    Q -->|off| OUT["poster.py → destination(s)"]
+    REV -->|approve| OUT
 ```
+
+Heavy work (`concurrency.py`) runs on a separate thread under a semaphore so the bot never locks up. The `auto_poster/` module (prices/ads/news) runs alongside this path, fully separate and with its own database.
+
+<a id="screenshots"></a>
+
+## 🖼 Screenshots
+
+<details>
+<summary><b>Click to expand</b></summary>
+
+<br/>
+
+<!-- Add bot panel and browser-extension screenshots here -->
+<!--
+<img src="docs/screenshots/main-menu.png"     width="30%" />
+<img src="docs/screenshots/watermark.png"      width="30%" />
+<img src="docs/screenshots/approval-queue.png" width="30%" />
+-->
+
+_No screenshots added yet._
+
+</details>
+
+<a id="quick-start"></a>
+
+## 🚀 Quick Start
+
+### One-line install (recommended)
+
+On a Linux server (Ubuntu / Debian / CentOS):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiQTeam/telegram-repost/main/install.sh | sudo bash
+```
+
+The installer is **interactive** and prompts for:
+
+| Prompt | Description |
+|---|---|
+| Bot token | from [@BotFather](https://t.me/BotFather) |
+| Admin ID(s) | from [@userinfobot](https://t.me/userinfobot), comma-separated |
+| Default destination channel | optional — can be added later from inside the bot |
+| Mistral / Groq key | optional — for the ad filter's AI adjudication |
+
+It then installs prerequisites, a `virtualenv`, the dependencies (including CPU `torch` and the LaMa/Real-ESRGAN model files), writes `.env`, and runs the bot as a **systemd** service (always-on + auto-restart, timezone `Asia/Tehran`).
+
+### Service management
+
+```bash
+systemctl status  mrliq-bot     # status
+systemctl restart mrliq-bot     # restart (after editing .env)
+journalctl -u mrliq-bot -f      # live logs
+```
+
+### Manual install (alternative)
+
+```bash
+git clone https://github.com/LiQTeam/telegram-repost.git
+cd telegram-repost
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+cp .env.example .env      # then fill .env with your token/IDs
+python3 main.py
+```
+
+After install, send `/start` to the bot in Telegram to open the admin panel.
+
+> [!NOTE]
+> Docker is not currently supported; the official deployment is via systemd.
+
+<a id="configuration"></a>
+
+## ⚙️ Configuration
+
+All variables are read from `.env` (full sample: [`.env.example`](.env.example)). Only `BOT_TOKEN` and `ADMIN_IDS` are required.
+
+| Variable | Required | Default | Description |
+|---|:---:|---|---|
+| `BOT_TOKEN` | ✅ | — | Bot token from @BotFather |
+| `ADMIN_IDS` | ✅ | — | Admin numeric IDs, comma-separated |
+| `TARGET_CHAT_ID` | — | — | Default destination channel |
+| `DB_PATH` | — | `data/bot.sqlite` | SQLite database path |
+| `TIMEZONE` | — | `Asia/Tehran` | Timezone for scheduling |
+| `MAX_CONCURRENT_HEAVY_JOBS` | — | `3` | Max images processed concurrently |
+| `DOWNLOAD_CACHE_MAX_ITEMS` | — | `200` | Download-cache item cap |
+| `DOWNLOAD_CACHE_TTL_SECONDS` | — | `1800` | Cache item retention (seconds) |
+| `DOWNLOAD_CACHE_MAX_BYTES` | — | `157286400` | Total cache cap (bytes, 150MB) |
+| `MAX_DOWNLOAD_BYTES` | — | `62914560` | Per-file download cap (bytes, 60MB) |
+| `AD_FILTER_CACHE_MAX_ITEMS` | — | `2000` | AI-result cache cap |
+| `AD_FILTER_CACHE_TTL_SECONDS` | — | `21600` | Ad-filter cache TTL (seconds) |
+| `TEMPLATE_MATCH_THRESHOLD` | — | `0.75` | Watermark template-match threshold |
+| `MAX_WATERMARK_AREA_RATIO` | — | `0.3` | Max inpaint region area ratio |
+| `MISTRAL_API_KEY` | — | — | Mistral key (AI adjudication) |
+| `GROQ_API_KEY` | — | — | Groq key (AI adjudication) |
+| `POLLINATIONS_API_KEY` | — | — | Pollinations image-gen key |
+| `DEEPAI_API_KEY` | — | — | DeepAI image-gen key |
+| `STABLEHORDE_API_KEY` | — | — | Stable Horde image-gen key |
+| `IMAGE_GEN_TIMEOUT` | — | `30` | Image-gen timeout (seconds) |
+| `IMAGE_GEN_MAX_RETRIES` | — | `2` | Max image-gen retries |
+| `STABLEHORDE_POLL_TIMEOUT` | — | `180` | Stable Horde poll timeout |
+| `STABLEHORDE_POLL_INTERVAL` | — | `5` | Poll interval (seconds) |
+| `EXTENSION_API_ENABLED` | — | `false` | Enable the extension API |
+| `EXTENSION_API_HOST` | — | `0.0.0.0` | Extension API host |
+| `EXTENSION_API_PORT` | — | `8843` | Extension API port |
+| `EXTENSION_API_TOKEN` | — | — | Shared bot ↔ extension token |
+
+<a id="requirements"></a>
+
+## 🖥 Requirements
+
+| Item | Minimum / Recommended |
+|---|---|
+| **Python** | 3.10 or newer |
+| **OS** | Linux (Ubuntu / Debian / CentOS and derivatives); auto-install via `apt`/`yum`/`dnf` |
+| **RAM** | 1GB minimum for the core; **2GB+ recommended** with AI features (torch + models) enabled |
+| **Disk** | ~500MB for core + deps; **+~220MB** for AI model files (`big-lama.pt` ~200MB, `realesr-general-x4v3.pth` ~17MB) |
+| **Network** | access to `api.telegram.org` and (for model downloads) `github.com` |
+
+**Key dependencies:** `python-telegram-bot 21.6`, `aiohttp`, `beautifulsoup4` + `lxml`, `Pillow`, `numpy`, `opencv-python-headless`, `torch 2.4.1 (CPU)`, `cryptography`, `psutil`, `jdatetime` + `tzdata`, `arabic-reshaper` + `python-bidi`, `openpyxl`. Full list in [`requirements.txt`](requirements.txt).
+
+> AI features (LaMa, Real-ESRGAN) are CPU-heavy; they run slower on weak servers but never block reposting (automatic fallback).
+
+<a id="structure"></a>
 
 ## 📦 Project Structure
 
 ```
 telegram-repost/
-├── main.py                     # bot entry point
-├── cli.py                      # command-line tool (add source/dest channels, …)
-├── install.sh                  # automatic VPS install (systemd)
+├── main.py                     # entry point: bot + scheduler + monitor + auto/manual poster + extension API
+├── cli.py                      # command-line tool (add channels/users, list, stats, backup)
+├── install.sh                  # automatic VPS install (systemd, model downloads)
 ├── requirements.txt
-├── .env.example                # configuration sample
+├── .env.example                # full configuration sample
 ├── CHANGELOG.md
-├── assets/
-│   ├── banner.png              # README banner (built by scripts/make_banner.py)
-│   └── badges/                 # watermark badge icons (Telegram/Instagram)
-├── fonts/                      # Persian font (Vazirmatn) for watermarks
+├── assets/                     # banner, donate button, watermark badge icons
+├── fonts/                      # Persian Vazirmatn font (correct RTL watermark rendering)
 ├── data/                       # SQLite DB + logs (created at runtime)
-├── docs/                       # extra docs (deployment, debug report)
-├── scripts/
-│   └── make_banner.py          # README banner generator
-├── tests/                      # automated tests (python3 tests/run_all.py)
-├── browser-extension/          # Telegram Web connector (Chrome MV3)
-│   ├── manifest.json
-│   ├── background.js · content.js · popup.* · options.html
-│   └── icons/
+├── docs/                       # extra docs (deployment guide, debug report)
+├── scripts/                    # donate-button generator (Pillow)
+├── tests/                      # automated tests — python3 tests/run_all.py
+├── browser-extension/          # Telegram Web connector (Chrome MV3): background/content/popup/options
 └── bot/
     ├── config.py               # reads settings from .env
     ├── database.py             # SQLite layer: channels, mappings, slots, logs
-    ├── scraper.py              # fetches posts from t.me/s/username
-    ├── formatter.py            # raw HTML → Telegram-safe HTML
+    ├── scraper.py              # fetch posts from t.me/s/username (+ pagination, video recovery)
+    ├── formatter.py            # raw HTML → Telegram-safe HTML + link/mention/phone cleanup
+    ├── poster.py               # final caption, approval queue, send to one destination
+    ├── scheduler.py            # scheduler tick: seven-slot/instant/interval + fan-out
+    ├── smart_scheduler.py      # smart scheduling (analysis + time suggestion)
+    ├── manual_poster.py        # manual/instant send + queue management (manual: prefix)
     ├── watermark.py            # builds the watermark box with Pillow
     ├── custom_watermark.py     # independent Telegram/Instagram watermarks
-    ├── ai_watermark.py         # watermark detection (OpenCV) + removal orchestration
-    ├── lama_model.py           # watermark inpainting with LaMa (TorchScript)
+    ├── ai_watermark.py         # watermark detection (Template + OpenCV) + removal orchestration
+    ├── lama_model.py           # LaMa inpainting (TorchScript) + OpenCV fallback
     ├── sr_model.py             # quality enhancement (SRVGGNetCompact / Real-ESRGAN)
-    ├── image_router.py         # image-processing router
-    ├── ad_filter.py            # ad-post filter
-    ├── ai_router.py            # AI adjudication (Mistral / Groq)
-    ├── duplicate_filter.py     # duplicate-post filter
-    ├── poster.py               # builds the final caption + sends to one destination
-    ├── scheduler.py            # scheduler tick + fan-out to destinations
-    ├── smart_scheduler.py      # smart scheduling
-    ├── manual_poster.py        # manual / instant "send last posts"
+    ├── image_router.py         # image generation with a failover chain
+    ├── ai_router.py            # AI text adjudication (Mistral / Groq)
+    ├── ad_filter.py            # ad filter (v3, context-aware + AI)
+    ├── duplicate_filter.py     # duplicate filter (hash + fuzzy)
+    ├── ad_feedback_report.py   # filter feedback report + Excel export
     ├── cache.py                # download cache
     ├── concurrency.py          # semaphore + thread for heavy jobs
-    ├── backup_manager.py       # encrypted backups
-    ├── extension_api.py        # API server for the browser extension
-    ├── notification_manager.py · resource_monitor.py · public_report_channel.py
-    ├── keyboards.py · button_config.py · button_style.py · utils.py · jdatetime_utils.py
-    ├── handlers/
-    │   ├── menu.py             # button router + menu texts
-    │   ├── inputs.py           # admin text/number input processing
-    │   └── common.py           # admin check + safe message edit
-    └── auto_poster/            # isolated "News & Prices" module (separate DB)
-        ├── config.py · db.py · scheduler.py
-        ├── ads.py              # ads module
-        ├── menu.py · keyboards.py
+    ├── backup_manager.py       # encrypted backup + restore
+    ├── extension_api.py        # aiohttp server for the browser extension
+    ├── resource_monitor.py     # CPU/RAM/disk monitor + alerts
+    ├── notification_manager.py # admin notifications to a separate private channel
+    ├── public_report_channel.py# public transparency report channel
+    ├── button_style.py         # colored buttons (Bot API 9.4 via api_kwargs)
+    ├── button_config.py        # central button color/text/schedule config
+    ├── jdatetime_utils.py      # Jalali (Persian) date utilities
+    ├── utils.py · keyboards.py
+    ├── handlers/               # menu.py (button router) · inputs.py (admin input) · common.py
+    └── auto_poster/            # isolated "prices/ads/news" module, separate DB (auto_poster.db)
+        └── config.py · db.py · scheduler.py · ads.py · menu.py · keyboards.py
 ```
+
+<a id="limitations"></a>
 
 ## ⚠️ Known Limitations
 
-- **Source channels must be public** — the source is read from `t.me/s/username`; private channels are unsupported (except via the browser extension).
-- **Instant-mode delay** — since there's no Userbot/MTProto, "instant" means up to a 30-second delay (the bot's polling interval), not real-time with publishing.
-- **Large videos** — sometimes have no direct link on the public preview page and are skipped (a Telegram limitation, not a bug).
-- **Source image quality** — Telegram pre-compresses preview-page images; "AI enhancement" partially compensates, but the original is unavailable.
-- **Daily send ceiling** — in seven-slot mode, each source channel posts at most as many times per day as its active slots (up to 7).
-- **Button colors** — Telegram offers only three predefined colors (blue/green/red), visible only in up-to-date apps; older versions show the normal gray button (no error).
-- **Album photo editing** — in the approval preview only the first (cover) photo can be replaced; the rest of the album is left untouched.
-- **AI models are optional** — if the LaMa / Real-ESRGAN weights aren't downloaded, the bot runs fully and only these two features are gracefully disabled.
+- **Source channels must be public** (except via the browser extension for private cases).
+- **~30s delay in instant mode** — because there is no MTProto/Userbot.
+- **Large videos** sometimes have no direct link on the public preview page and are skipped (a Telegram limitation).
+- **Source image quality** is already compressed by Telegram; "AI enhancement" partially compensates, it does not restore the original.
+- **Daily send ceiling** in scheduled mode equals the number of active slots (up to 7) per day.
+- **Smart scheduling** is effectively limited without view data — Telegram's Bot API doesn't expose message views.
+- **Button colors** offer only three options (blue/green/red) and are visible only in up-to-date Telegram apps; older versions show the normal gray button (no error).
+- **Album photo editing** in the approval preview only replaces the first (cover) photo.
+- **AI models and API keys are optional**; without them, the related features are gracefully disabled.
 
-For deeper technical details and the full debug report, see [`docs/DEBUG_REPORT_FA.md`](docs/DEBUG_REPORT_FA.md), [`docs/DEPLOYMENT_GUIDE_FA.md`](docs/DEPLOYMENT_GUIDE_FA.md), and [`CHANGELOG.md`](CHANGELOG.md).
+<a id="languages"></a>
+
+## 🌐 Languages & Fonts
+
+- **Bot UI language:** Persian (with the Jalali/Persian calendar from `jdatetime_utils.py`).
+- **Documentation:** 🇮🇷 فارسی · 🇬🇧 English · 🇷🇺 Русский · 🇨🇳 中文.
+- **Watermark font:** the Persian **Vazirmatn** font (Bold/Medium) ships in `fonts/`. For correct Persian/Arabic rendering (letter joining + right-to-left), `arabic-reshaper` and `python-bidi` are used; without the Persian font, Latin text is fine but Persian may render incompletely.
+
+<a id="contributing"></a>
 
 ## 🤝 Contributing
 
 Contributions are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a Pull Request. In short: fork the repo, work on a separate branch, run the tests with `python3 tests/run_all.py`, and open a PR with a clear description. Open an Issue for bugs and suggestions.
 
+<a id="license"></a>
+
 ## 📄 License
 
 Released under the **MIT** license — see [`LICENSE`](LICENSE).
+
+<a id="support"></a>
+
+## ⭐ Support
+
+If this project helped you, give it a ⭐ — it's the best motivation to keep developing.
+
+<div align="center">
+<br/>
+<!-- Replace with your own donation link -->
+<a href="https://github.com/LiQTeam/telegram-repost"><img src="assets/donate.png" alt="Donate" width="230" /></a>
+<br/><br/>
+<sub><a href="#top">⬆️ Back to top</a></sub>
+</div>
