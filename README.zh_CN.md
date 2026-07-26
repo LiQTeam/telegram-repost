@@ -4,7 +4,7 @@
 
 🇮🇷 [فارسی](README.md) | 🇬🇧 [English](README.en.md) | 🇷🇺 [Русский](README.ru_RU.md) | 🇨🇳 **中文**
 
-<img src="assets/banner.png" alt="Messrs LiQ — Smart Telegram Repost Bot" width="100%" />
+<img src="assets/banner.zh.png" alt="Messrs LiQ — Smart Telegram Repost Bot" width="100%" />
 
 <h3>智能转发、AI 图像处理与完整的 Telegram 频道自动化 —— 一切都在机器人内部完成。</h3>
 
