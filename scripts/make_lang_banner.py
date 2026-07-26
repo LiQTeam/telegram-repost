@@ -3,10 +3,11 @@
 Generate localized hero banners (assets/banner.<lang>.png) that match the
 project's dark + green→blue glow aesthetic.
 
-The rich English/Persian banners are supplied artwork; this builds clean,
+The rich Persian/English banners are supplied artwork; this builds clean,
 brand-consistent banners for other languages from scratch with Pillow:
-a deep dark background with aurora glow, the "Messrs LiQ" wordmark with a
-gradient + glow, a localized tagline, and a row of stat chips.
+a deep dark background with aurora glow and a faint dot-grid, the
+"Messrs LiQ" wordmark with a gradient + glow, a localized tagline, and a
+row of dark glass stat chips with high-contrast text.
 
 Usage:  python3 scripts/make_lang_banner.py ru zh
 """
@@ -18,25 +19,27 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
-FONT_TITLE = ROOT / "fonts" / "Vazirmatn-Bold.ttf"          # Latin wordmark (brand-consistent)
-FONT_CYR = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")  # Cyrillic
-FONT_CJK = Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")          # Chinese
+FONT_TITLE = ROOT / "fonts" / "Vazirmatn-Bold.ttf"                        # Latin wordmark
+FONT_CYR = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")   # Cyrillic
+FONT_CJK = Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")           # Chinese
 
-W, H = 1536, 660
+W, H = 1536, 740
 BG_TOP = (7, 11, 18)
-BG_BOTTOM = (11, 18, 32)
-GRAD_TOP = (34, 230, 160)     # spring green
-GRAD_BOTTOM = (56, 160, 255)  # azure blue
-CYAN = (64, 224, 255)
-SUB = (198, 214, 234)
-CHIP_TXT = (222, 232, 246)
+BG_BOTTOM = (12, 20, 34)
+GRAD_TOP = (45, 233, 168)      # spring green
+GRAD_BOTTOM = (58, 162, 255)   # azure blue
+CYAN = (94, 232, 255)
+SUB = (200, 216, 236)
+CHIP_TITLE = (240, 247, 255)
+CHIP_SUB = (150, 170, 198)
+ACCENTS = [(45, 233, 168), (58, 162, 255), (94, 232, 255), (140, 130, 255), (58, 205, 220)]
 
 LANGS = {
     "ru": {
         "font": FONT_CYR,
         "tagline": "Умный бот репостинга для Telegram",
         "kicker": "Продвинуто · Умно · Автоматически",
-        "chips": [("СКОРОСТЬ", "Высокая"), ("НАДЁЖНОСТЬ", "Стабильно"),
+        "chips": [("СКОРОСТЬ", "Высокая"), ("НАДЁЖНО", "Стабильно"),
                   ("24/7", "Всегда онлайн"), ("УМНЫЙ", "На базе ИИ"),
                   ("БЕЗОПАСНО", "Приватность")],
     },
@@ -68,23 +71,26 @@ def vgrad(size, top, bottom) -> Image.Image:
     return strip.resize((w, h))
 
 
-def text_size(draw, text, fnt):
+def tsize(draw, text, fnt):
     l, t, r, b = draw.textbbox((0, 0), text, font=fnt)
     return r - l, b - t, l, t
 
 
-def gradient_text(base: Image.Image, text: str, fnt, cx: int, y: int):
-    """Draw center-anchored gradient text with an outer glow at vertical y."""
+def center_text(draw, text, fnt, cx, y, fill):
+    tw, th, l, t = tsize(draw, text, fnt)
+    draw.text((cx - tw // 2 - l, y - t), text, font=fnt, fill=fill)
+    return th
+
+
+def gradient_wordmark(base, text, fnt, cx, y):
     tmp = Image.new("L", base.size, 0)
     d = ImageDraw.Draw(tmp)
-    tw, th, lx, ty = text_size(d, text, fnt)
-    x = cx - tw // 2 - lx
-    d.text((x, y - ty), text, font=fnt, fill=255)
+    tw, th, l, t = tsize(d, text, fnt)
+    d.text((cx - tw // 2 - l, y - t), text, font=fnt, fill=255)
     grad = vgrad(base.size, GRAD_TOP, GRAD_BOTTOM).convert("RGBA")
     grad.putalpha(tmp)
-    glow = grad.filter(ImageFilter.GaussianBlur(22))
-    base.alpha_composite(glow)
-    base.alpha_composite(grad)
+    base.alpha_composite(grad.filter(ImageFilter.GaussianBlur(24)))  # glow
+    base.alpha_composite(grad)                                       # crisp
     return th
 
 
@@ -92,66 +98,67 @@ def build(lang: str) -> Path:
     cfg = LANGS[lang]
     img = vgrad((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
 
+    # faint dot-grid texture
+    grid = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(grid)
+    for gy in range(40, H, 46):
+        for gx in range(40, W, 46):
+            gd.ellipse((gx, gy, gx + 2, gy + 2), fill=(120, 150, 190, 22))
+    img = Image.alpha_composite(img, grid)
+
     # aurora glow blobs
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse((-200, 120, 460, 760), fill=(34, 230, 160, 60))
-    gd.ellipse((W - 500, -260, W + 220, 360), fill=(56, 160, 255, 60))
-    img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(140)))
+    bd = ImageDraw.Draw(glow)
+    bd.ellipse((-220, 120, 480, 820), fill=(45, 233, 168, 55))
+    bd.ellipse((W - 520, -280, W + 240, 400), fill=(58, 162, 255, 55))
+    img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(150)))
 
     draw = ImageDraw.Draw(img)
     cx = W // 2
 
-    # code-bracket motif
-    f_code = font(FONT_TITLE, 46)
-    cw, ch, cl, ct = text_size(draw, "</>", f_code)
-    draw.text((cx - cw // 2 - cl, 42 - ct), "</>", font=f_code, fill=CYAN)
-
-    # "Messrs" kicker over the wordmark
-    f_small = font(FONT_TITLE, 52)
-    sw, sh, sl, st = text_size(draw, "Messrs", f_small)
-    draw.text((cx - sw // 2 - sl, 104 - st), "Messrs", font=f_small, fill=SUB)
-
-    # "{ LiQ }" big gradient wordmark
-    f_big = font(FONT_TITLE, 170)
-    gradient_text(img, "{ LiQ }", f_big, cx, 170)
+    center_text(draw, "</>", font(FONT_TITLE, 48), cx, 46, CYAN)
+    center_text(draw, "Messrs", font(FONT_TITLE, 54), cx, 112, SUB)
+    gradient_wordmark(img, "{ LiQ }", font(FONT_TITLE, 176), cx, 182)
     draw = ImageDraw.Draw(img)
 
-    # tagline (localized)
-    f_tag = font(cfg["font"], 44)
-    tw, th, tl, tt = text_size(draw, cfg["tagline"], f_tag)
-    draw.text((cx - tw // 2 - tl, 372 - tt), cfg["tagline"], font=f_tag, fill=SUB)
+    # tagline (well below the wordmark to avoid overlap)
+    center_text(draw, cfg["tagline"], font(cfg["font"], 46), cx, 430, SUB)
 
     # gradient underline
-    lw = 380
-    ug = vgrad((lw, 6), GRAD_TOP, GRAD_BOTTOM).convert("RGBA")
-    img.alpha_composite(ug, (cx - lw // 2, 442))
+    lw = 400
+    img.alpha_composite(vgrad((lw, 6), GRAD_TOP, GRAD_BOTTOM).convert("RGBA"), (cx - lw // 2, 502))
     draw = ImageDraw.Draw(img)
 
-    # kicker line
-    f_kick = font(cfg["font"], 34)
-    kw, kh, kl, kt = text_size(draw, cfg["kicker"], f_kick)
-    draw.text((cx - kw // 2 - kl, 470 - kt), cfg["kicker"], font=f_kick, fill=CYAN)
+    center_text(draw, cfg["kicker"], font(cfg["font"], 34), cx, 534, CYAN)
 
-    # stat chips row
+    # stat chips — dark glass panels with a colored accent dot + high-contrast text
     chips = cfg["chips"]
     n = len(chips)
-    gap = 26
-    chip_w = (W - 2 * 90 - (n - 1) * gap) // n
-    chip_h = 92
-    y0 = 536
-    f_ct = font(cfg["font"], 30)
-    f_cs = font(cfg["font"], 22)
-    x = 90
-    for title, subtitle in chips:
+    gap, chip_h, y0, side = 28, 108, 604, 96
+    chip_w = (W - 2 * side - (n - 1) * gap) // n
+    f_ct = font(cfg["font"], 32)
+    f_cs = font(cfg["font"], 23)
+
+    panel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(panel)
+    x = side
+    boxes = []
+    for i in range(n):
         box = (x, y0, x + chip_w, y0 + chip_h)
-        draw.rounded_rectangle(box, radius=16, fill=(255, 255, 255, 10),
-                               outline=(90, 130, 190, 150), width=2)
-        tw, th, tl, tt = text_size(draw, title, f_ct)
-        draw.text((x + chip_w // 2 - tw // 2 - tl, y0 + 20 - tt), title, font=f_ct, fill=CHIP_TXT)
-        sw, sh, sl, stt = text_size(draw, subtitle, f_cs)
-        draw.text((x + chip_w // 2 - sw // 2 - sl, y0 + 56 - stt), subtitle, font=f_cs, fill=SUB)
+        boxes.append(box)
+        pd.rounded_rectangle(box, radius=18, fill=(20, 30, 48, 210),
+                             outline=(70, 100, 150, 160), width=2)
         x += chip_w + gap
+    img = Image.alpha_composite(img, panel)
+    draw = ImageDraw.Draw(img)
+
+    for i, (title, subtitle) in enumerate(chips):
+        bx0, by0, bx1, by1 = boxes[i]
+        mid = (bx0 + bx1) // 2
+        acc = ACCENTS[i % len(ACCENTS)]
+        draw.ellipse((mid - 5, by0 + 16, mid + 5, by0 + 26), fill=acc)  # accent dot
+        center_text(draw, title, f_ct, mid, by0 + 40, CHIP_TITLE)
+        center_text(draw, subtitle, f_cs, mid, by0 + 78, CHIP_SUB)
 
     out = ROOT / "assets" / f"banner.{lang}.png"
     img.convert("RGB").save(out, "PNG")
@@ -160,12 +167,11 @@ def build(lang: str) -> Path:
 
 
 def main() -> None:
-    langs = sys.argv[1:] or ["ru", "zh"]
-    for lg in langs:
-        if lg not in LANGS:
+    for lg in (sys.argv[1:] or ["ru", "zh"]):
+        if lg in LANGS:
+            build(lg)
+        else:
             print(f"skip unknown lang: {lg}")
-            continue
-        build(lg)
 
 
 if __name__ == "__main__":
