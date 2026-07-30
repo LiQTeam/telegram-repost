@@ -231,8 +231,11 @@ IMAGE_TASKS: dict[str, TaskInfo] = {
     "generate_image": TaskInfo("generate_image", "🖼 تولید تصویر",    CAP_IMAGE),
     "edit_image":     TaskInfo("edit_image",     "🎨 تغییر استایل عکس", CAP_IMAGE),
     "caption_image":  TaskInfo("caption_image",  "🗒 توضیحِ تصویر",  CAP_IMAGE),
-    "vision":         TaskInfo("vision",         "👁 Vision",         CAP_IMAGE),
-    "ocr":            TaskInfo("ocr",            "🔤 OCR",            CAP_IMAGE),
+    # ⚠️ «Vision» و «OCR» عمداً حذف شدند: هیچ‌جای ربات این دو task_id را صدا
+    # نمی‌زد (نه ai_router، نه image_router، نه هیچ هندلری) — فقط دو ردیفِ
+    # بی‌اثر در صفحه‌ی «🔀 مسیریابیِ وظایف» بودند که کاربر می‌توانست برایشان
+    # سرویس تنظیم کند بدونِ اینکه هیچ‌وقت استفاده شود. چون منویِ مسیریابی از
+    # همین دیکشنری ساخته می‌شود، حذف از اینجا یعنی حذف از UI هم.
 }
 
 ALL_TASKS: dict[str, TaskInfo] = {**TEXT_TASKS, **IMAGE_TASKS}

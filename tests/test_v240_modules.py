@@ -174,11 +174,14 @@ _AI_BUTTON_TASKS = {
     "ai:prompt_writer": "prompt_writer",
     "ai:caption": "generate_caption",
     "ai:title": "generate_title",
-    "ai:auto_reply": "auto_reply",
     "ai:analyze_text": "analyze_text",
     "ai:image": "generate_image",
     "ai:style_image": "edit_image",
 }
+
+# وظایفی که عمداً دکمه‌ی مستقیم در صفحه‌ی اصلیِ AI ندارند (ولی زنده‌اند و در
+# «🔀 مسیریابیِ وظایف» قابلِ تنظیم‌اند). auto_reply موتورِ «💬 چت با AI» است.
+_INTENTIONALLY_NOT_ON_MAIN_PAGE = {"auto_reply"}
 _menu_labels = {
     b.callback_data: b.text
     for row in kb.ai_services_menu().inline_keyboard for b in row
@@ -188,11 +191,38 @@ for cbd, task_id in _AI_BUTTON_TASKS.items():
     got = _menu_labels.get(cbd)
     check(f"ai_menu.label_matches_catalog[{task_id}]", got == want, f"want={want!r} got={got!r}")
 
-# هر وظیفه‌ی متنیِ کاتالوگ باید یک دکمه در صفحه‌ی اصلیِ AI داشته باشد (وگرنه
-# سرویس تعریف شده ولی از منو در دسترس نیست — دقیقاً باگی که v2.4.0 رفعش کرد).
-_covered = set(_AI_BUTTON_TASKS.values())
+# هر وظیفه‌ی متنیِ کاتالوگ باید یا دکمه در صفحه‌ی اصلیِ AI داشته باشد یا صراحتاً
+# در فهرستِ استثناهای بالا باشد (وگرنه سرویس تعریف شده ولی از منو در دسترس
+# نیست — دقیقاً باگی که v2.4.0 رفعش کرد).
+_covered = set(_AI_BUTTON_TASKS.values()) | _INTENTIONALLY_NOT_ON_MAIN_PAGE
 _missing = set(cat.TEXT_TASKS) - _covered
 check("ai_menu.all_text_tasks_reachable", not _missing, f"بدونِ دکمه: {sorted(_missing)}")
+# و برعکس: استثناها هم باید واقعاً از صفحه‌ی اصلی غایب باشند.
+_unexpected = {t for t in _INTENTIONALLY_NOT_ON_MAIN_PAGE if t in _AI_BUTTON_TASKS.values()}
+check("ai_menu.exceptions_really_absent", not _unexpected, f"هنوز دکمه دارند: {sorted(_unexpected)}")
+
+# ===========================================================================
+#  ۶-ب) وظایفِ حذف‌شده نباید در «مسیریابیِ وظایف» برگردند
+# ===========================================================================
+# Vision و OCR هیچ‌جای ربات صدا زده نمی‌شدند و فقط دو ردیفِ بی‌اثر در منویِ
+# مسیریابی بودند. منویِ مسیریابی مستقیماً از cat.ALL_TASKS ساخته می‌شود، پس
+# نبودنشان در کاتالوگ یعنی نبودنشان در UI.
+from bot.handlers import ai_providers_menu as _apm  # noqa: E402
+
+for _dead in ("vision", "ocr"):
+    check(f"ai_tasks.removed_from_catalog[{_dead}]", _dead not in cat.ALL_TASKS,
+          f"هنوز در کاتالوگ هست: {cat.ALL_TASKS.get(_dead)}")
+
+_task_cbs = [
+    b.callback_data for row in _apm.tasks_menu(None).inline_keyboard for b in row
+]
+for _dead in ("vision", "ocr"):
+    check(f"ai_tasks.no_routing_button[{_dead}]", f"aiapi:task:{_dead}" not in _task_cbs,
+          repr(_task_cbs))
+# بقیه‌ی وظایف باید همچنان ردیفِ خودشان را داشته باشند.
+_missing_routes = [t for t in cat.ALL_TASKS if f"aiapi:task:{t}" not in _task_cbs]
+check("ai_tasks.every_catalog_task_routable", not _missing_routes, repr(_missing_routes))
+check("ai_tasks.auto_reply_still_routable", "aiapi:task:auto_reply" in _task_cbs, repr(_task_cbs))
 
 # ===========================================================================
 #  ۷) منویِ کلیدهای SerpAPI دقیقاً MAX_KEYS خانه دارد

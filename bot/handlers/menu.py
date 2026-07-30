@@ -3197,31 +3197,77 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
         await send_pending_preview(context.bot, pending_id)
         return
 
-    # ==================== وضعیت AI (ترجمه/خلاصه‌سازی/بازنویسی) ====================
+    # ==================== وضعیتِ زنده‌ی همه‌ی موتورهای AI ====================
+    # ⚠️ قبلاً این صفحه فقط Groq و Mistralِ .env را تست می‌کرد؛ Gemini و
+    # HuggingFace و کلاً کلیدهایِ شخصیِ ثبت‌شده در «مدیریتِ API» اصلاً دیده
+    # نمی‌شدند. حالا از mgr.live_status_report استفاده می‌کند که همه‌ی
+    # سرویس‌هایِ کاتالوگ × همه‌ی کلیدهاشون را واقعاً تست می‌کند و همان نتیجه
+    # را در دیتابیس هم می‌نویسد، پس آیکونِ صفحه‌ی مدیریت با این گزارش یکی می‌شود.
     if data == "ai:status_services":
-        await query.answer("⏳ در حال تست زنده‌ی Groq و Mistral...")
-        from ..ai_router import AIRouter, GROQ_MODEL, MISTRAL_MODEL
-        router = AIRouter(owner_user_id=scope_owner(uid))
-        try:
-            status = await router.check_status()
-        finally:
-            await router.close()
+        from .. import ai_catalog as _cat
+        from .. import ai_provider_manager as _mgr
 
-        def _fmt(p: str) -> str:
-            info = status[p]
-            return "✅ فعال و پاسخگو" if info["ok"] else f"❌ خطا ({info['error']})"
+        _owner = scope_owner(uid)
+        await query.answer("⏳ در حال تستِ زنده‌ی همه‌ی موتورهای AI…")
+        report = await _mgr.live_status_report(_owner)
 
-        text = (
-            "🧠 <b>وضعیتِ موتورهای هوش مصنوعی (ترجمه / خلاصه‌سازی / بازنویسی)</b>\n"
-            f"{DIVIDER}\n"
-            f"⚡️ Groq ({GROQ_MODEL}): {_fmt('groq')}\n"
-            f"🔷 Mistral ({MISTRAL_MODEL}): {_fmt('mistral')}\n"
-            f"{DIVIDER}\n"
-            "💡 اگه یکی از دو موتور خطا بده، ربات به‌صورت خودکار درخواست رو به موتور دیگه سوییچ می‌کنه.\n"
-            "💡 این وضعیت هیچ ربطی به موتورهای پردازش تصویر (بخش واترمارک) نداره."
+        _OVERALL_ICON = {
+            _cat.STATUS_ACTIVE: "🟢",
+            _cat.STATUS_FALLBACK: "🟡",
+            _cat.STATUS_CHECKING: "🟡",
+            _cat.STATUS_QUOTA_EXCEEDED: "🟠",
+            _cat.STATUS_CONNECTION_ERROR: "🟠",
+            _cat.STATUS_WRONG_SERVICE: "🔴",
+            _cat.STATUS_INVALID: "🔴",
+            _cat.STATUS_NOT_SET: "⚪️",
+        }
+        _CHECK_ICON = {
+            _cat.STATUS_ACTIVE: "✅",
+            _cat.STATUS_QUOTA_EXCEEDED: "🟠",
+            _cat.STATUS_CONNECTION_ERROR: "🟠",
+            _cat.STATUS_WRONG_SERVICE: "❌",
+            _cat.STATUS_INVALID: "❌",
+            _cat.STATUS_NOT_SET: "⚪️",
+        }
+
+        lines = ["🧠 <b>وضعیتِ زنده‌ی موتورهای هوش مصنوعی</b>", DIVIDER]
+        _n_ok = 0
+        for entry in report:
+            info, checks, overall = entry["info"], entry["checks"], entry["overall"]
+            caps = " ".join(
+                icon for cap, icon in ((_cat.CAP_TEXT, "📝"), (_cat.CAP_IMAGE, "🖼"))
+                if cap in info.capabilities
+            )
+            lines.append(
+                f"\n{_OVERALL_ICON.get(overall, '⚪️')} <b>{_esc(info.label)}</b> {caps}"
+            )
+            model = info.default_text_model or info.default_image_model
+            if model:
+                lines.append(f"   ↳ مدلِ پیش‌فرض: <code>{_esc(model)}</code>")
+            if not checks:
+                lines.append("   ↳ ⚪️ هیچ کلیدی ثبت نشده")
+                continue
+            for c in checks:
+                if c["status"] == _cat.STATUS_ACTIVE:
+                    _n_ok += 1
+                where = f"کلیدِ {c['slot']}" if c["source"] == "key" else "کلیدِ .env"
+                mark = _CHECK_ICON.get(c["status"], "🟡")
+                label = _cat.STATUS_LABELS.get(c["status"], c["status"])
+                # برچسبِ کاتالوگ خودش ایموجی دارد؛ فقط متنش را می‌خواهیم.
+                label = label.split(" ", 1)[-1] if label[:1] in "🔴🟠🟡🟢" else label
+                detail = f" — {_esc(c['detail'][:90])}" if c.get("detail") else ""
+                lines.append(f"   {mark} {where}: {_esc(label)}{detail}")
+
+        lines.append(f"\n{DIVIDER}")
+        lines.append(f"📊 مجموعاً <b>{_n_ok}</b> کلیدِ فعال و پاسخگو.")
+        lines.append(
+            "💡 وقتی یک کلید Quota تموم کنه یا خطا بده، ربات خودکار می‌ره سراغِ "
+            "کلیدِ بعدیِ همون سرویس و بعد سرویسِ فالبک (نگاه کن به «🔀 مسیریابیِ وظایف»)."
         )
+        lines.append("💡 این وضعیت ربطی به موتورهای پردازشِ تصویرِ بخشِ واترمارک نداره.")
+
         from .ai_providers_menu import home_menu as _aiapi_home_menu
-        await safe_edit(query, text, _aiapi_home_menu(scope_owner(uid)), ParseMode.HTML)
+        await safe_edit(query, "\n".join(lines), _aiapi_home_menu(_owner), ParseMode.HTML)
         return
 
     # ==================== چت پیوسته با هوش مصنوعی ====================

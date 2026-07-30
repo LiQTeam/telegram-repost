@@ -35,7 +35,7 @@ from . import (
     handlers,
 )
 
-__version__ = "2.4.1"
+__version__ = "2.4.2"
 __author__ = "MR LiQ Team"
 
 __all__ = [

@@ -180,6 +180,134 @@ async def retest_all_keys(owner_user_id: Optional[int], service_id: str) -> list
     return out
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# وضعیتِ زنده‌ی همه‌ی موتورها (تستِ واقعیِ هر کلیدِ هر سرویس)
+# ────────────────────────────────────────────────────────────────────────────
+# ⚠️ چرا اینجا و نه در ai_router: نسخه‌های قبلی «وضعیتِ زنده» فقط Groq و
+# Mistralِ .env را تست می‌کرد، یعنی Gemini و HuggingFace و کلاً کلیدهایِ
+# شخصی‌ای که از منویِ «مدیریتِ API» ثبت شده بودند اصلاً دیده نمی‌شدند و
+# آیکونِ صفحه‌ی مدیریت با نتیجه‌ی تستِ زنده هم‌خوان نبود. حالا این تابع
+# تک‌منبعِ حقیقتِ «وضعیت» است: همه‌ی سرویس‌هایِ کاتالوگ × همه‌ی کلیدهاشون.
+
+# سقفِ زمانیِ کلِ گزارش. هر کلید خودش تا ۱۲ ثانیه (VALIDATE_TIMEOUT) وقت دارد
+# و همه موازی تست می‌شوند، پس این سقف فقط برایِ حالتِ فاجعه (شبکه‌ی کاملاً
+# قفل) است تا کاربر پشتِ یک پیامِ «در حال تست…» گیر نکند.
+LIVE_STATUS_TOTAL_TIMEOUT = 25.0
+
+# کلیدِ .env هر سرویس (اگر داشته باشد). Gemini/HuggingFace کلیدِ .env ندارند و
+# فقط از طریقِ منویِ «مدیریتِ API» تنظیم می‌شوند.
+_ENV_RAW_KEY_GETTERS = {
+    "mistral": lambda: getattr(cfg, "MISTRAL_API_KEY", "") or "",
+    "groq": lambda: getattr(cfg, "GROQ_API_KEY", "") or "",
+}
+
+
+async def _live_check_one(
+    owner_user_id: Optional[int], service_id: str, slot: Optional[int], raw_key: str, source: str,
+) -> dict:
+    """یک کلید را واقعاً تست می‌کند و (برایِ کلیدهایِ ذخیره‌شده) وضعیتِ جدید را
+    در دیتابیس هم می‌نویسد تا آیکونِ صفحه‌ی «مدیریتِ API» با همین نتیجه یکی شود."""
+    status, detail = await validate_provider(service_id, raw_key)
+    if source == "key" and slot is not None:
+        try:
+            # اگر همین الان به Quota خورده، مثلِ مسیرِ عادیِ فراخوانی یک
+            # cooldown واقعی می‌گذاریم؛ وگرنه cooldownِ قبلی پاک می‌شود چون
+            # این یک تستِ زنده و صریح است و کلیدی که دوباره جواب می‌دهد نباید
+            # تا پایانِ کولداونِ قدیمی کنار بماند.
+            # ⚠️ بدونِ این تفکیک، _aggregate_status کلیدِ quota-خورده‌ای که
+            # cooldownش خالی شده را «فعال» حساب می‌کرد و آیکونِ صفحه‌ی مدیریت
+            # 🟢 می‌شد، درست برخلافِ چیزی که همین گزارش تازه نشان داده بود.
+            cooldown = (
+                str(time.time() + KEY_COOLDOWN_SECONDS)
+                if status == cat.STATUS_QUOTA_EXCEEDED else ""
+            )
+            db.ai_update_key_status(owner_user_id, service_id, slot, status, detail, cooldown_until=cooldown)
+        except Exception as e:  # noqa: BLE001 - نوشتنِ وضعیت نباید کلِ گزارش را بترکاند
+            log.warning("ثبتِ وضعیتِ زنده‌ی %s/slot%s ناموفق بود: %s", service_id, slot, e)
+    return {"slot": slot, "source": source, "status": status, "detail": detail}
+
+
+async def live_status_report(owner_user_id: Optional[int]) -> list[dict]:
+    """تستِ زنده‌ی **همه‌ی** سرویس‌هایِ کاتالوگ و **همه‌ی** کلیدهایشان، به‌صورتِ موازی.
+
+    خروجی، به ترتیبِ کاتالوگ، برایِ هر سرویس یک dict:
+        {
+          "info":    ProviderInfo,
+          "checks":  [{"slot", "source", "status", "detail"}, ...],
+          "overall": یکی از cat.STATUS_*,
+        }
+    اگر سرویسی نه کلیدِ ذخیره‌شده داشته باشد و نه کلیدِ .env، هیچ تستی برایش
+    زده نمی‌شود و overall برابرِ STATUS_NOT_SET است (نه «خطا» — نبودِ کلید
+    خرابی نیست).
+    """
+    providers = cat.all_providers()
+
+    # ۱) فهرستِ همه‌ی تست‌هایِ لازم را جمع می‌کنیم (بدونِ هیچ فراخوانیِ شبکه‌ای)
+    plan: list[tuple[str, Optional[int], str, str]] = []  # (service_id, slot, raw_key, source)
+    empty_slots: dict[str, list[dict]] = {}
+    for info in providers:
+        empty_slots.setdefault(info.id, [])
+        rows = db.ai_list_keys(owner_user_id, info.id)
+        for row in rows:
+            enc = row["api_key_encrypted"]
+            raw = crypto.decrypt_text(enc) if enc else ""
+            if raw:
+                plan.append((info.id, row["slot"], raw, "key"))
+            else:
+                # کلیدی ثبت شده ولی رمزگشایی نشد (فایلِ سکرت عوض شده) — این
+                # خودش یک وضعیتِ واقعی است و باید در گزارش دیده شود.
+                empty_slots[info.id].append({
+                    "slot": row["slot"], "source": "key",
+                    "status": cat.STATUS_INVALID,
+                    "detail": "رمزگشاییِ کلیدِ ذخیره‌شده ناموفق بود",
+                })
+        if not rows:
+            env_key = (_ENV_RAW_KEY_GETTERS.get(info.id) or (lambda: ""))()
+            if env_key:
+                plan.append((info.id, None, env_key, "env"))
+
+    # ۲) همه‌ی تست‌ها با هم (نه پشتِ سرِ هم) — ۴ سرویس × تا ۵ کلید سریالی
+    #    می‌توانست چند دقیقه طول بکشد.
+    async def _guarded(service_id, slot, raw, source):
+        try:
+            return await _live_check_one(owner_user_id, service_id, slot, raw, source)
+        except Exception as e:  # noqa: BLE001
+            log.warning("تستِ زنده‌ی %s/slot%s خطا داد: %s", service_id, slot, e)
+            return {"slot": slot, "source": source,
+                    "status": cat.STATUS_CONNECTION_ERROR, "detail": f"{e.__class__.__name__}: {e}"}
+
+    results: list[dict] = []
+    if plan:
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*(_guarded(*item) for item in plan)),
+                timeout=LIVE_STATUS_TOTAL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            log.warning("گزارشِ وضعیتِ زنده از سقفِ %.0f ثانیه رد شد.", LIVE_STATUS_TOTAL_TIMEOUT)
+            results = [{"slot": slot, "source": source,
+                        "status": cat.STATUS_CONNECTION_ERROR, "detail": "پاسخ در زمانِ مقرر نرسید"}
+                       for _sid, slot, _raw, source in plan]
+
+    # ۳) نتیجه‌ها را به سرویسِ خودشان برمی‌گردانیم
+    by_service: dict[str, list[dict]] = {info.id: list(empty_slots[info.id]) for info in providers}
+    for (service_id, _slot, _raw, _source), res in zip(plan, results):
+        by_service[service_id].append(res)
+
+    report = []
+    for info in providers:
+        checks = sorted(by_service[info.id], key=lambda c: (c["slot"] is None, c["slot"] or 0))
+        if checks:
+            overall = next(
+                (s for s in _STATUS_PRIORITY if any(c["status"] == s for c in checks)),
+                cat.STATUS_NOT_SET,
+            )
+        else:
+            overall = cat.STATUS_NOT_SET
+        report.append({"info": info, "checks": checks, "overall": overall})
+    return report
+
+
 def delete_key(owner_user_id: Optional[int], service_id: str, slot: int) -> None:
     db.ai_delete_key(owner_user_id, service_id, slot)
 

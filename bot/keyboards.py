@@ -1076,9 +1076,12 @@ def ai_services_menu() -> InlineKeyboardMarkup:
          _btn(_lbl("generate_hashtags", "#️⃣ تولید هشتگ"), "ai:hashtags"),
          _btn(_lbl("prompt_writer", "🧠 پرامپت‌نویس"), "ai:prompt_writer")],
         [_btn(_lbl("generate_caption", "💬 تولید کپشن"), "ai:caption"),
-         _btn(_lbl("generate_title", "🏷 تولید عنوان"), "ai:title")],
-        [_btn(_lbl("auto_reply", "🤖 پاسخ خودکار"), "ai:auto_reply"),
+         _btn(_lbl("generate_title", "🏷 تولید عنوان"), "ai:title"),
          _btn(_lbl("analyze_text", "🔍 تحلیل متن"), "ai:analyze_text")],
+        # ⚠️ «🤖 پاسخ خودکار» عمداً از این صفحه برداشته شد (درخواستِ کاربر).
+        # خودِ وظیفه‌ی auto_reply زنده می‌مونه: «💬 چت با AI» از همین مسیر
+        # استفاده می‌کنه (ai_router.chat → try_custom_text("auto_reply", ...))،
+        # پس ردیفش در «🔀 مسیریابیِ وظایف» هم سرِ جاش می‌مونه و کارآمده.
         [_btn(_lbl("generate_image", "🖼 تولید تصویر"), "ai:image"),
          _btn(_lbl("edit_image", "🎨 تغییر استایل عکس"), "ai:style_image")],
         [_btn("🔎 جست‌وجویِ وب", "ai:web_search")],
