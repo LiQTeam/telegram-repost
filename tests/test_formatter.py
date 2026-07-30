@@ -117,7 +117,11 @@ om1 = f.ensure_rtl_lines(multi)
 om2 = f.ensure_rtl_lines(om1)
 check("rtl.multiline_idempotent", om1 == om2, f"\n om1={om1!r}\n om2={om2!r}")
 
-# ب-4: بین متن و فوتر همیشه دقیقاً یک خط خالی
+# ب-4: بین متن و فوتر همیشه دقیقاً یک خط خالی.
+# نکته: append_footer عمداً خطِ خالیِ عمدی را با نشانه‌ی _GAP_MARK علامت می‌زند تا
+# از _collapse_blankish_runs جانِ سالم به‌در ببرد (وگرنه blank_lines=2 همیشه یک
+# خط می‌شد)؛ خودِ نشانه در آخرین مرحله (ensure_rtl_lines) پاک می‌شود. پس ثابتِ
+# واقعی روی *خروجیِ نهایی* است، نه روی خروجیِ خامِ append_footer.
 footer = '<a href="https://t.me/x">@x</a>'
 for body, label in [
     ("متن پست", "zero_blank"),
@@ -125,10 +129,16 @@ for body, label in [
     ("متن پست\n\n\n\n\n", "five_nl"),
     ("متن پست\n" + RLM + "\n‌", "invisible"),
 ]:
-    res = f.append_footer(body, footer)
-    # باید دقیقا یک \n\n بین بدنه و فوتر باشد
-    ok = res == f"متن پست\n\n{footer}"
+    raw = f.append_footer(body, footer)
+    res = f.ensure_rtl_lines(raw)
+    # دقیقاً یک خطِ خالی بین بدنه و فوتر، و هیچ نشانه‌ی داخلی‌ای باقی نمانده
+    ok = res.endswith(f"متن پست\n\n{footer}") and f._GAP_MARK not in res
     check(f"footer.one_blank.{label}", ok, repr(res))
+
+# ب-4-ب: blank_lines=2 (امضای فایل‌های .nm/.npvt) واقعاً دو خطِ خالی می‌دهد —
+# همون باگی که _GAP_MARK برای رفعش اضافه شد.
+res2 = f.ensure_rtl_lines(f.append_footer("متن پست", footer, blank_lines=2))
+check("footer.two_blank_lines_kept", res2.endswith(f"متن پست\n\n\n{footer}"), repr(res2))
 
 # ب-5: تگ‌های خاص سالم بمانند
 # blockquote expandable (نه expandable="")

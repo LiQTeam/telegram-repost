@@ -11,6 +11,42 @@ from .. import config
 
 log = logging.getLogger("repost_bot.handlers")
 
+# نشونه‌های متنیِ خطای معروفِ تلگرام برایِ callback_query: هم وقتی کوئری
+# واقعاً منقضی شده (کاربر/شبکه دیر جواب داده)، هم وقتی همون کوئری قبلاً یک‌بار
+# answer شده، دقیقاً همین یک پیام رو برمی‌گردونه - گمراه‌کننده‌ست ولی رفتارِ
+# مستندِ خودِ تلگرامه. توی هر دو حالت، تنها اثرِ عملی اینه که پاپ‌آپِ تاییدِ
+# کلیک نشون داده نمی‌شه؛ خودِ عملیاتِ اصلی (اگه قبلش/بعدش اجرا شده باشه) کاملاً
+# سالم می‌مونه. پس امنه که این خطای خاص رو نادیده بگیریم، به‌جایِ این‌که کلِ
+# پردازشِ آپدیت کرش کنه و به هندلرِ سراسریِ خطا برسه (که باعثِ لاگ‌شدنِ
+# ترسناک + اسپمِ پیامِ «یه خطای غیرمنتظره پیش اومد» به کاربر/کانال می‌شد).
+_EXPIRED_QUERY_MARKERS = (
+    "query is too old",
+    "query id is invalid",
+    "response timeout expired",
+)
+
+
+def is_expired_callback_query_error(err: BaseException) -> bool:
+    """تشخیصِ خطای «Query is too old and response timeout expired or query id
+    is invalid» (و واریانت‌های مشابهش)."""
+    msg = str(err).lower()
+    return any(marker in msg for marker in _EXPIRED_QUERY_MARKERS)
+
+
+async def safe_answer(query, *args, **kwargs) -> bool:
+    """آنسر کردنِ امنِ callback_query. اگه کوئری منقضی شده باشه یا قبلاً یک‌بار
+    answer شده باشه (تلگرام هر callback_query رو فقط یک‌بار قابلِ answer
+    می‌دونه)، به‌جایِ raise کردنِ استثنا فقط لاگِ سبک می‌کنه و False برمی‌گردونه.
+    خطاهای دیگه (غیرِ این موردِ خاص) دست‌نخورده raise می‌شن."""
+    try:
+        await query.answer(*args, **kwargs)
+        return True
+    except BadRequest as e:
+        if is_expired_callback_query_error(e):
+            log.info("کالبک‌کوئری منقضی/تکراری بود، answer نادیده گرفته شد: %s", e)
+            return False
+        raise
+
 
 def is_admin(user_id: int | None) -> bool:
     return bool(user_id) and user_id in config.ADMIN_IDS
@@ -42,7 +78,8 @@ def admin_only(func):
         user = update.effective_user
         if not is_admin(user.id if user else None):
             if update.callback_query:
-                await update.callback_query.answer(
+                await safe_answer(
+                    update.callback_query,
                     "⛔️ دسترسی نداری، این ربات فقط برای ادمین‌هاست.", show_alert=True
                 )
             elif update.message:
@@ -58,7 +95,8 @@ def authorized_only(func):
         user = update.effective_user
         if not is_authorized(user.id if user else None):
             if update.callback_query:
-                await update.callback_query.answer(
+                await safe_answer(
+                    update.callback_query,
                     "⛔️ دسترسی نداری.", show_alert=True
                 )
             elif update.message:

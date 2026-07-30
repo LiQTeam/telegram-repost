@@ -214,18 +214,18 @@ async def _send_with_retry(send_coro_factory, attempts: int = 3, base_delay: flo
             # به‌عنوانِ ناموفق گزارش/رد بشه. اگه یک خطای ناشناخته‌ی جدید بیاد که
             # توی هیچ‌کدوم از دو لیست نیست، محافظه‌کارانه retry می‌کنیم (رفتارِ قبلی
             # برای حالتِ نامشخص حفظ می‌شه تا خطای گذرای واقعی به‌اشتباه رها نشه).
-            is_known_retryable = any(m in reason_l for m in _RETRYABLE_ERROR_MARKERS)
-            is_unknown = not is_known_retryable
-            if is_known_retryable or is_unknown:
-                if attempt >= attempts:
-                    raise
-                log.info(
-                    "ارسالِ %s ناموفق بود (تلاشِ %s/%s): %s - بعدِ %.1f ثانیه دوباره امتحان می‌شه.",
-                    label or "مدیا", attempt, attempts, e, base_delay * attempt,
-                )
-                await asyncio.sleep(base_delay * attempt)
-            else:
+            #
+            # نکته: چون خطاهایِ _PERMANENT_ERROR_MARKERS بالاتر (خطِ ۲۰۵) از قبل
+            # raise شدن، هرچی به این‌جا برسه یا «گذرایِ شناخته‌شده» یا «ناشناخته»ست -
+            # هر دو باید retry بشن، پس شرطِ جداگانه لازم نیست (نسخه‌ی قبلی این‌جا
+            # یک شرطِ همیشه-True داشت: `is_known_retryable or is_unknown`).
+            if attempt >= attempts:
                 raise
+            log.info(
+                "ارسالِ %s ناموفق بود (تلاشِ %s/%s): %s - بعدِ %.1f ثانیه دوباره امتحان می‌شه.",
+                label or "مدیا", attempt, attempts, e, base_delay * attempt,
+            )
+            await asyncio.sleep(base_delay * attempt)
 
 
 async def _maybe_public_success_report(bot: Bot, owner_user_id, destinations, channel_id: int) -> None:
@@ -299,10 +299,39 @@ async def _notify_admins_of_failures(
     lines = ["⚠️ <b>ارسال به بعضی مقصدها ناموفق بود</b>\n"]
     for dest_label, reason in to_report:
         lines.append(f"• <b>{_esc(str(dest_label))}</b>: {_esc(reason)}")
-    lines.append(
-        "\nاگه دلیلش «ادمین نبودنِ ربات» هست، ربات رو توی اون کانال ادمین کن "
-        "(با دسترسیِ ارسال پیام) و دوباره تلاش می‌شه."
-    )
+
+    # فیکسِ باگ: قبلاً همیشه یک پیامِ ثابت («اگه ادمین نیست، ادمینش کن و
+    # خودکار دوباره تلاش می‌شه») به انتهای هر گزارشی چسبونده می‌شد - حتی وقتی
+    # دلیلِ واقعی هیچ ربطی به دسترسیِ ادمین نداشت (مثلاً webpage_media_empty،
+    # که یعنی تلگرام نتونسته عکسِ پیش‌نمایش/بندانگشتیِ لینکِ پست رو بگیره) و
+    # حتی وقتی این پستِ خاص دیگه خودکار دوباره امتحان نمی‌شه (چون حداقل یک
+    # مقصدِ دیگه موفق شده و last_post_id جلو رفته). نتیجه: ادمین وقتشو صرفِ
+    # چک‌کردنِ دسترسیِ ادمین می‌کرد درحالی‌که مشکل اصلاً اون نبود، و منتظرِ
+    # تلاشِ خودکاری می‌موند که هیچ‌وقت اتفاق نمی‌افتاد. الان راهنمایی بر
+    # اساسِ خودِ متنِ خطا انتخاب می‌شه.
+    reasons_l = " | ".join(reason.lower() for _, reason in to_report)
+    hints: list[str] = []
+    if any(m in reasons_l for m in (
+        "not enough rights", "have no rights", "chat_write_forbidden",
+        "chat_admin_required", "forbidden", "kicked", "bot is not a member",
+    )):
+        hints.append(
+            "اگه دلیلش «ادمین نبودنِ ربات» توی اون کانال هست، ربات رو با دسترسیِ "
+            "ارسالِ پیام ادمین کن. این پستِ خاص خودش خودکار دوباره فرستاده "
+            "نمی‌شه؛ برایِ همین مقصد از دکمه‌ی «ارسال N پستِ آخر» استفاده کن."
+        )
+    if "webpage_media_empty" in reasons_l:
+        hints.append(
+            "خطای «webpage_media_empty» ربطی به دسترسیِ ادمین نداره؛ یعنی تلگرام "
+            "نتونسته عکسِ پیش‌نمایش/بندانگشتیِ لینکِ این پست رو بگیره (لینک از کار "
+            "افتاده یا حذف شده). این خطا دائمیه و خودکار دوباره امتحان نمی‌شه."
+        )
+    if not hints:
+        hints.append(
+            "این‌جور خطاها معمولاً دائمی‌ان و به‌طورِ خودکار دوباره امتحان نمی‌شن؛ "
+            "لاگ رو چک کن."
+        )
+    lines.append("\n" + " ".join(hints))
     text = "\n".join(lines)
 
     targets = list(config.ADMIN_IDS)
@@ -857,6 +886,23 @@ async def send_post(
     else:
         caption_html = build_caption_html(post.html_text, channel_id, destination_id, media=post.media)
         message_html = build_message_html(post.html_text, channel_id, destination_id, limit=10**7, media=post.media)
+
+        # ---------- گاردِ «کپشن نباید بی‌دلیل برای یک مقصد گم بشه» ----------
+        # باگِ گزارش‌شده: از یک مبدأ به دو مقصد، پست در یک مقصد با کپشن و در مقصدِ
+        # دیگر بدونِ کپشن می‌رفت. اگر متنِ خامِ مبدأ محتوا دارد ولی کپشنِ ساخته‌شده‌ی
+        # این مقصد (به هر دلیلِ per-destination مثلِ لیستِ حذفِ عبارت یا خطای
+        # ساخت) تهی شده، به‌جای ارسالِ بی‌کپشن، کپشن را یک‌بارِ دیگر بدونِ
+        # تنظیماتِ اختصاصیِ مقصد (destination_id=None) می‌سازیم تا حداقل همان کپشنِ
+        # مبدأ به همه‌ی مقصدها برسد. این‌طور «هر دو مقصد کپشن می‌گیرند».
+        _src_has_text = bool((post.raw_text or "").strip()) or bool(strip_html_tags(post.html_text or "").strip())
+        if _src_has_text and not strip_html_tags(caption_html or "").strip():
+            log.warning(
+                "کپشنِ پست %s برای مقصدِ %s تهی شد درحالی‌که متنِ مبدأ محتوا داشت؛ "
+                "کپشنِ سراسری (بدونِ تنظیماتِ اختصاصیِ مقصد) جایگزین شد تا کپشن گم نشه.",
+                post.id, destination_id,
+            )
+            caption_html = build_caption_html(post.html_text, channel_id, None, media=post.media)
+            message_html = build_message_html(post.html_text, channel_id, None, limit=10**7, media=post.media)
 
     # ---------- ایموجیِ پرمیوم (سفارشی) ----------
     # به‌طورِ پیش‌فرض آیدیِ ایموجیِ پرمیوم حذف می‌شه و فقط ایموجیِ عادی می‌مونه.
@@ -1577,13 +1623,19 @@ async def send_pending_preview(bot: Bot, pending_id: int) -> None:
                 log.warning("ارسال پیش‌نمایش پستِ در صف تایید به ادمین %s ناموفق بود: %s", admin_id, e)
 
 
-async def enqueue_for_approval(bot: Bot, channel_id: int, post: Post, flag_reason: str = "") -> int:
+async def enqueue_for_approval(
+    bot: Bot, channel_id: int, post: Post, flag_reason: str = "",
+    ad_filter_detail: dict | None = None,
+) -> int:
     """
     یک پستِ تازه‌ی اسکرِیپ‌شده رو به صفِ تایید اضافه می‌کنه: کپشنِ نهایی (با امضا و
     قالب‌بندی) رو از الان می‌سازه (تا ادمین دقیقا همون چیزی که می‌خواد فرستاده بشه رو
     ببینه و در صورت نیاز ویرایش کنه) و پیش‌نمایشش رو برای ادمین(ها) می‌فرسته.
     flag_reason: اگه پر باشه (مثلاً فیلترِ تبلیغات پست رو مشکوک تشخیص داده)، یک
     بنرِ هشدار بالای پیش‌نمایش نشون داده میشه.
+    ad_filter_detail: جزئیاتِ خامِ ad_filter.classify_async (score/threshold/llm/
+    llm2/keywords/...) - اگه پر باشه به‌صورتِ JSON روی همین ردیفِ صف ذخیره می‌شه
+    تا بعداً در خروجیِ اکسلِ فیدبک (ad_feedback_report.py) قابلِ تحلیل باشه.
     """
     caption_html = build_caption_html(post.html_text, channel_id, media=post.media)
     media_json = media_items_to_json(post.media)
@@ -1591,11 +1643,19 @@ async def enqueue_for_approval(bot: Bot, channel_id: int, post: Post, flag_reaso
     ch = db.get_channel(channel_id)
     _, owner_user_id = _approval_targets(ch)
 
+    detail_json = ""
+    if ad_filter_detail:
+        try:
+            detail_json = json.dumps(ad_filter_detail, ensure_ascii=False)
+        except Exception:  # noqa: BLE001 - نباید صف‌شدنِ پست به‌خاطرِ سریالایزِ جزئیات شکست بخوره
+            detail_json = ""
+
     pending_id = db.add_pending_post(
         channel_id, post.id, caption_html, media_json,
         flag_reason=flag_reason,
         owner_user_id=owner_user_id,
         body_html=post.html_text or "",
+        ad_filter_detail=detail_json,
     )
     await send_pending_preview(bot, pending_id)
     return pending_id
@@ -1722,7 +1782,7 @@ def _is_too_short_text_only(post: Post, channel_id: int | None = None) -> bool:
 async def _run_ad_filter(
     post: Post, username: str, *, keywords_raw: str,
     min_mentions: int, min_links: int, score_threshold: int, smart: bool = True,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict]:
     """یک بار اجرای موتورِ تشخیصِ تبلیغ روی متنِ پست با تنظیماتِ داده‌شده.
     این تابع بدونِ حالت (stateless) است و هم برای فیلترِ عمومی (کاربر/کانالِ
     مبدأ) و هم برای فیلترِ اختصاصیِ هر مقصد استفاده می‌شه.
@@ -1743,12 +1803,12 @@ async def _run_ad_filter(
     config_source پاس داده می‌شه تا این لینک‌ها هم دیده بشن."""
     keywords = ad_filter.parse_keywords(keywords_raw) or ad_filter.DEFAULT_KEYWORDS
     analyze_text = post.raw_text or post.html_text
-    is_ad, reason, _detail = await ad_filter.classify_async(
+    is_ad, reason, detail = await ad_filter.classify_async(
         analyze_text, username, keywords,
         min_mentions=min_mentions, min_links=min_links, score_threshold=score_threshold,
         use_llm=smart, config_source=post.html_text,
     )
-    return is_ad, reason
+    return is_ad, reason, detail
 
 
 def _effective_adfilter_cfg(channel_id, destination_id, owner) -> dict:
@@ -1923,7 +1983,7 @@ async def process_new_post(
         # کش برای این‌که وقتی چند مقصد دقیقاً همون تنظیماتِ فیلترِ تبلیغات رو دارن
         # (حالتِ رایج: بدونِ override اختصاصی)، به‌ازای هر کدوم یک بارِ دیگه به AI
         # درخواست نزنیم - همون نتیجه از کش برمی‌گرده.
-        _adf_cache: dict[tuple, tuple[bool, str]] = {}
+        _adf_cache: dict[tuple, tuple[bool, str, dict]] = {}
         for dest in destinations:
             cfg = _effective_adfilter_cfg(channel_id, dest["id"], _adf_owner)
             if cfg["enabled"]:
@@ -1932,22 +1992,24 @@ async def process_new_post(
                     cfg["threshold"], cfg["smart"],
                 )
                 if cache_key in _adf_cache:
-                    is_ad, reason = _adf_cache[cache_key]
+                    is_ad, reason, adf_detail = _adf_cache[cache_key]
                 else:
-                    is_ad, reason = await _run_ad_filter(
+                    is_ad, reason, adf_detail = await _run_ad_filter(
                         post, channel["username"],
                         keywords_raw=cfg["keywords"], min_mentions=cfg["min_mentions"],
                         min_links=cfg["min_links"], score_threshold=cfg["threshold"],
                         smart=cfg["smart"],
                     )
-                    _adf_cache[cache_key] = (is_ad, reason)
+                    _adf_cache[cache_key] = (is_ad, reason, adf_detail)
                 if is_ad:
                     if cfg["action"] == "review":
                         log.info("پست %s از @%s برای مقصدِ «%s» مشکوک به تبلیغ بود؛ کلِ پست به صفِ تایید رفت (%s).",
                                  post.id, channel["username"], dest["title"] or dest["chat_id"], reason)
                         db.increment_ad_filtered()
                         flag_banner = ad_filter.format_ad_flag_banner(reason)
-                        await enqueue_for_approval(bot, channel_id, post, flag_reason=flag_banner)
+                        await enqueue_for_approval(
+                            bot, channel_id, post, flag_reason=flag_banner, ad_filter_detail=adf_detail,
+                        )
                         return PostResult.QUEUED
                     log.info("پست %s برای مقصدِ «%s» طبقِ فیلترِ تبلیغات رد شد (%s).",
                              post.id, dest["title"] or dest["chat_id"], reason)

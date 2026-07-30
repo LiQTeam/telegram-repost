@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 
@@ -16,7 +17,7 @@ from ..ad_filter import (
     DEFAULT_KEYWORDS as AD_DEFAULT_KEYWORDS,
 )
 from ..database import db
-from ..utils import extract_username, extract_chat_id, clamp
+from ..utils import extract_username, extract_chat_id, clamp, build_logs_message
 from ..formatter import ensure_rtl_lines
 from .common import authorized_only, is_admin, scope_owner
 
@@ -77,11 +78,19 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _owner_allowed_states = True
         elif awaiting.startswith("ai_") and has_perm(uid, "ai"):
             _owner_allowed_states = True
+        elif awaiting.startswith("aiapi_") and has_perm(uid, "ai"):
+            _owner_allowed_states = True
     if not _owner_allowed_states and not is_admin(uid):
         return
 
     text = (update.message.text or "").strip()
     context.user_data.pop("awaiting", None)
+
+    # ==================== سیستمِ مدیریتِ API هوش مصنوعی: وارد کردنِ کلید ====================
+    if awaiting.startswith("aiapi_setkey:"):
+        from .ai_providers_menu import handle_text_input as _aiapi_text_input
+        await _aiapi_text_input(update, context, awaiting.split("aiapi_", 1)[1], text)
+        return
 
     # ==================== افزودن کانال مبدأ ====================
     if awaiting == "src_add_name":
@@ -817,6 +826,100 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ کانال اختصاصی اعلان‌های ادمین ذخیره شد.", reply_markup=kb.resource_menu())
         return
 
+    if awaiting == "ai_web_search":
+        query = text.strip()
+        if not query:
+            await update.message.reply_text("❌ عبارتِ جست‌وجو نمی‌تونه خالی باشه.", reply_markup=kb.cancel_input_menu())
+            return
+        context.user_data.pop("awaiting", None)
+        from ..web_search import WebSearchRouter
+        wrouter = WebSearchRouter()
+        try:
+            kind, results = await wrouter.search(query, count=4)
+            if not results:
+                await update.message.reply_text(
+                    "❌ چیزی پیدا نشد. یا هیچ کلیدِ SerpAPI تنظیم نشده (از «⚙️ تنظیمِ کلیدهای SerpAPI») "
+                    "یا سهمیه‌ی همه‌ی کلیدها تموم شده یا نتیجه‌ای برای این عبارت نبود.",
+                    reply_markup=kb.ai_web_search_menu(),
+                )
+                return
+
+            if kind == "image":
+                # فقط عکس، بدونِ هیچ توضیح/کپشنی (طبقِ درخواستِ کاربر).
+                from telegram import InputMediaPhoto
+                usable = [r for r in results if r.get("image_url")]
+                if not usable:
+                    await update.message.reply_text("❌ عکسِ قابلِ‌نمایشی پیدا نشد.", reply_markup=kb.ai_web_search_menu())
+                    return
+                sent_any = False
+                if len(usable) == 1:
+                    try:
+                        await update.message.reply_photo(photo=usable[0]["image_url"])
+                        sent_any = True
+                    except Exception:
+                        pass
+                else:
+                    media = [InputMediaPhoto(media=r["image_url"]) for r in usable]
+                    try:
+                        await update.message.reply_media_group(media=media)
+                        sent_any = True
+                    except Exception:
+                        # اگه آلبوم به‌خاطرِ یک لینکِ خراب رد شد، تکی‌تکی امتحان کن.
+                        for r in usable:
+                            try:
+                                await update.message.reply_photo(photo=r["image_url"])
+                                sent_any = True
+                            except Exception:
+                                continue
+                if not sent_any:
+                    await update.message.reply_text("❌ عکس‌ها قابلِ ارسال نبودن (لینک‌ها معتبر نبودن).", reply_markup=kb.ai_web_search_menu())
+                    return
+                await update.message.reply_text("✅ نتایج بالا. برایِ جست‌وجویِ بعدی از منو استفاده کن:", reply_markup=kb.ai_web_search_menu())
+            else:
+                # خبر: عکسِ خبر (اگه بود) + متن + لینکِ سایتِ منبع، جدیدترین‌ها بالا.
+                for r in results:
+                    caption = (
+                        f"📰 <b>{html.escape(r['title'][:250])}</b>\n"
+                        f"{DIVIDER}\n"
+                        f"{html.escape((r.get('snippet') or '')[:600])}\n\n"
+                        f"🏷 منبع: {html.escape(r.get('source_name') or '')}"
+                        + (f" • 🕓 {html.escape(r['date'])}" if r.get('date') else "")
+                        + f"\n🔗 {html.escape(r.get('source_url') or '')}"
+                    )
+                    if r.get("image_url"):
+                        try:
+                            await update.message.reply_photo(photo=r["image_url"], caption=caption[:1024], parse_mode=ParseMode.HTML)
+                            continue
+                        except Exception:
+                            pass  # اگه عکس لود نشد، حداقل متنِ خبر با لینک رو بفرست
+                    await update.message.reply_text(
+                        caption[:4000], parse_mode=ParseMode.HTML,
+                    )
+                await update.message.reply_text("✅ همین بود. برایِ جست‌وجویِ بعدی از منو استفاده کن:", reply_markup=kb.ai_web_search_menu())
+        except Exception as e:
+            log.exception("خطا در جست‌وجویِ وب: %s", e)
+            await update.message.reply_text("❌ خطا در جست‌وجو. دوباره تلاش کن.", reply_markup=kb.ai_web_search_menu())
+        finally:
+            await wrouter.close()
+        return
+
+    if awaiting.startswith("ai_web_setkey:"):
+        idx_s = awaiting.split(":", 1)[1]
+        value = text.strip()
+        context.user_data.pop("awaiting", None)
+        from ..web_search import WebSearchSettings
+        try:
+            idx = int(idx_s)
+        except (ValueError, TypeError):
+            idx = 0
+        WebSearchSettings.set_key(idx, value)
+        await update.message.reply_text(
+            f"✅ کلیدِ SerpAPI شماره‌ی {idx+1} ذخیره شد.\n\n{WebSearchSettings.status_text()}",
+            reply_markup=kb.ai_web_settings_menu(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     if awaiting.startswith("ai_tool_"):
         tool = awaiting.split("_", 2)[2]
         if not text.strip():
@@ -827,12 +930,80 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await update.message.reply_text("⏳ در حال پردازش با هوش مصنوعی...")
         from ..ai_router import AIRouter
-        router = AIRouter()
+        router = AIRouter(owner_user_id=scope_owner(uid))
+        base_tool, _, tool_param = tool.partition(":")
+        parse_mode = None
         try:
-            if tool == "translate":
-                out = await router.translate_to_persian(text)
-            elif tool == "summarize":
-                out = await router.summarize(text)
+            if base_tool == "translate":
+                raw = await router.translate_smart(text, target=tool_param or "fa")
+                lang_line, _, rest = raw.partition("\n")
+                detected = lang_line.split("LANG:", 1)[-1].strip() if "LANG:" in lang_line else ""
+                translated = rest.lstrip("\n") if detected else raw
+                if detected:
+                    out = f"🌐 <b>زبانِ تشخیص‌داده‌شده:</b> {html.escape(detected)}\n\n{html.escape(translated)}"
+                else:
+                    out = html.escape(raw)
+                parse_mode = ParseMode.HTML
+            elif base_tool == "summarize":
+                out = await router.summarize(text, level=tool_param or "medium")
+            elif base_tool == "fix_text":
+                out = await router.fix_text(text)
+            elif base_tool == "hashtags":
+                raw = await router.generate_hashtags(text)
+                out = f"#️⃣ <b>هشتگ‌هایِ پیشنهادی:</b>\n\n<code>{html.escape(raw.strip())}</code>"
+                parse_mode = ParseMode.HTML
+            elif base_tool == "prompt_writer":
+                raw = await router.prompt_writer(text)
+                out = f"🧠 <b>پرامپتِ حرفه‌ای (کپی کن و توی هر ابزارِ تصویری استفاده کن):</b>\n\n<pre>{html.escape(raw.strip())}</pre>"
+                parse_mode = ParseMode.HTML
+            elif base_tool == "style_custom":
+                image_bytes = context.user_data.get("ai_style_image_bytes")
+                if not image_bytes:
+                    await update.message.reply_text("❌ اول باید عکس رو بفرستی.", reply_markup=kb.ai_services_menu())
+                    return
+                from ..image_router import ImageRouter
+                irouter = ImageRouter(owner_user_id=scope_owner(uid))
+                try:
+                    instruction = (
+                        f"Transform this image into this style: {text.strip()}. "
+                        "Keep the main subject, composition and identity recognizable; only change the artistic style."
+                    )
+                    result = await irouter.edit_image(image_bytes, instruction)
+                finally:
+                    await irouter.close()
+                if not result:
+                    await update.message.reply_text(
+                        "❌ تغییرِ استایل انجام نشد. مطمئن شو کلیدِ Gemini در «مدیریتِ API هوش مصنوعی» فعال و معتبره.",
+                        reply_markup=kb.ai_services_menu(),
+                    )
+                    return
+                await update.message.reply_photo(photo=result, caption="🎨 استایلِ عکس تغییر کرد.", reply_markup=kb.ai_services_menu())
+                return
+            elif base_tool == "generate_caption":
+                sys_p = (
+                    "تو یک کپشن‌نویسِ حرفه‌ایِ شبکه‌های اجتماعی هستی. برای متنِ زیر یک کپشنِ فارسیِ "
+                    "جذاب، روان و کوتاه بنویس که برای انتشار در کانال/پیج مناسب باشه. فقط خودِ کپشن رو "
+                    "بده، بدونِ توضیحِ اضافه."
+                )
+                out = await router.route(text, task_type="generate_caption", system_prompt=sys_p)
+            elif base_tool == "generate_title":
+                sys_p = (
+                    "تو یک تیترنویسِ حرفه‌ای هستی. برای متنِ زیر یک عنوان/تیترِ فارسیِ کوتاه، گیرا و "
+                    "دقیق بنویس. فقط خودِ عنوان رو بده، بدونِ علامتِ نقل‌قول و بدونِ توضیحِ اضافه."
+                )
+                out = await router.route(text, task_type="generate_title", system_prompt=sys_p)
+            elif base_tool == "auto_reply":
+                sys_p = (
+                    "تو دستیارِ پاسخ‌گوی یک کانال/پیج هستی. به پیامِ زیر یک پاسخِ فارسیِ مؤدبانه، "
+                    "طبیعی و کوتاه بده، انگار یک انسانِ ادمین جواب می‌ده. فقط خودِ پاسخ رو بده."
+                )
+                out = await router.route(text, task_type="auto_reply", system_prompt=sys_p)
+            elif base_tool == "analyze_text":
+                sys_p = (
+                    "تو یک تحلیل‌گرِ متن هستی. متنِ زیر رو به فارسی تحلیل کن: موضوع، لحن/احساسِ کلی، "
+                    "نکاتِ کلیدی و مخاطبِ هدف. خروجی رو مرتب و خلاصه بده."
+                )
+                out = await router.route(text, task_type="analyze_text", system_prompt=sys_p)
             else:
                 out = await router.rewrite(text)
         except Exception as e:
@@ -842,7 +1013,7 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             await router.close()
         out = (out or "—")[:4000]
-        await update.message.reply_text(out, reply_markup=kb.ai_services_menu())
+        await update.message.reply_text(out, reply_markup=kb.ai_services_menu(), parse_mode=parse_mode)
         return
 
     # ==================== تولید تصویر با هوش مصنوعی ====================
@@ -859,7 +1030,7 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ در حال تولید تصویر... (ممکنه تا حدود یک دقیقه طول بکشه)")
 
         from ..image_router import ImageRouter
-        router = ImageRouter()
+        router = ImageRouter(owner_user_id=scope_owner(uid))
         image_bytes = None
         try:
             image_bytes = await router.generate_image(prompt)
@@ -908,7 +1079,7 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("⏳ در حال تایپ...")
         from ..ai_router import AIRouter
-        router = AIRouter()
+        router = AIRouter(owner_user_id=scope_owner(uid))
         try:
             out = await router.chat(history)
         except Exception as e:
@@ -937,10 +1108,8 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not logs:
             await update.message.reply_text("📋 هیچ لاگی برای این کانال یافت نشد.", reply_markup=kb.resource_menu())
             return
-        lines = ["📋 <b>لاگ‌های کانال</b>\n" + DIVIDER]
-        for log_row in logs[:20]:
-            lines.append(f"🕒 {log_row['jalali_date']}\n📌 {log_row['event_type']}\n📝 {log_row['message'][:100]}...")
-        await update.message.reply_text("\n\n".join(lines), reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
+        text = build_logs_message("📋 <b>لاگ‌های کانال</b>\n" + DIVIDER, logs)
+        await update.message.reply_text(text, reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
         return
 
     if awaiting == "logs_destination":
@@ -953,10 +1122,8 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not logs:
             await update.message.reply_text("📋 هیچ لاگی برای این کانال مقصد یافت نشد.", reply_markup=kb.resource_menu())
             return
-        lines = ["📋 <b>لاگ‌های کانال مقصد</b>\n" + DIVIDER]
-        for log_row in logs[:20]:
-            lines.append(f"🕒 {log_row['jalali_date']}\n📌 {log_row['event_type']}\n📝 {log_row['message'][:100]}...")
-        await update.message.reply_text("\n\n".join(lines), reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
+        text = build_logs_message("📋 <b>لاگ‌های کانال مقصد</b>\n" + DIVIDER, logs)
+        await update.message.reply_text(text, reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
         return
 
     if awaiting == "logs_user":
@@ -969,16 +1136,30 @@ async def text_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not logs:
             await update.message.reply_text("📋 هیچ لاگی برای این کاربر یافت نشد.", reply_markup=kb.resource_menu())
             return
-        lines = ["📋 <b>لاگ‌های کاربر</b>\n" + DIVIDER]
-        for log_row in logs[:20]:
-            lines.append(f"🕒 {log_row['jalali_date']}\n📌 {log_row['event_type']}\n📝 {log_row['message'][:100]}...")
-        await update.message.reply_text("\n\n".join(lines), reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
+        text = build_logs_message("📋 <b>لاگ‌های کاربر</b>\n" + DIVIDER, logs)
+        await update.message.reply_text(text, reply_markup=kb.resource_menu(), parse_mode=ParseMode.HTML)
         return
 
 
 @authorized_only
 async def photo_input_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     awaiting = context.user_data.get("awaiting")
+
+    if awaiting == "ai_style_photo":
+        photo = update.message.photo[-1] if update.message.photo else None
+        if not photo:
+            await update.message.reply_text("❌ عکس معتبری پیدا نشد. دوباره تلاش کن یا انصراف بزن.", reply_markup=kb.cancel_input_menu())
+            return
+        tg_file = await photo.get_file()
+        raw = bytes(await tg_file.download_as_bytearray())
+        context.user_data["ai_style_image_bytes"] = raw
+        context.user_data.pop("awaiting", None)
+        await update.message.reply_text(
+            "✅ عکس دریافت شد. حالا استایلِ موردنظرت رو انتخاب کن:",
+            reply_markup=kb.ai_style_options_menu(),
+        )
+        return
+
     if not awaiting or not awaiting.startswith("pp_photo:"):
         return
 

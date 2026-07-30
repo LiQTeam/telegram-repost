@@ -105,16 +105,21 @@ import asyncio
 def _run(coro):
     return asyncio.run(coro)
 
-async def _fake_llm_safe(text, hint_keywords=None):
-    return False
+# ⚠️ امضایِ واقعیِ llm_classify از نسخه‌ی ۵ به بعد یک سه‌تایی برمی‌گردونه:
+#     (verdict: bool|None, check_line: str, low_confidence: bool)
+# و آرگومانِ کلیدواژه‌ایِ provider هم می‌گیره (برای صدا زدنِ داورِ دوم). این
+# جایگزین‌های تستی باید دقیقاً همون شکل باشن؛ وگرنه classify_async موقعِ
+# unpack کردن با TypeError می‌ترکه (همون چیزی که این تست قبلاً بهش می‌خورد).
+async def _fake_llm_safe(text, hint_keywords=None, *, provider=None):
+    return False, "چیزِ خاصی تبلیغ نمی‌شود", False
 
-async def _fake_llm_ad(text, hint_keywords=None):
-    return True
+async def _fake_llm_ad(text, hint_keywords=None, *, provider=None):
+    return True, "یک پلتفرمِ معاملاتی تبلیغ می‌شود", False
 
-async def _fake_llm_unavailable(text, hint_keywords=None):
-    return None
+async def _fake_llm_unavailable(text, hint_keywords=None, *, provider=None):
+    return None, "", False
 
-async def _fake_llm_boom(text, hint_keywords=None):
+async def _fake_llm_boom(text, hint_keywords=None, *, provider=None):
     raise AssertionError("نباید برای پستِ کانفیگِ خالص صدا زده شود")
 
 _orig_llm_classify = adf.llm_classify

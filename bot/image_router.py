@@ -87,8 +87,9 @@ class ImageRouter:
     # نامِ Providerها به ترتیبِ اولویت (برای لاگ و گزارش)
     PROVIDER_ORDER = ("pollinations", "deepai", "stablehorde")
 
-    def __init__(self, timeout: float = IMAGE_GEN_TIMEOUT):
+    def __init__(self, timeout: float = IMAGE_GEN_TIMEOUT, owner_user_id: "int | None" = None):
         self.timeout = timeout
+        self.owner_user_id = owner_user_id
         self.session = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
         self._last_error: Optional[str] = None
         self._errors_by_provider: dict[str, str] = {}
@@ -412,6 +413,15 @@ class ImageRouter:
         self._errors_by_provider.clear()
         self._last_error = None
 
+        try:
+            from .ai_provider_manager import try_custom_image
+            custom_result = await try_custom_image(self.owner_user_id, "generate_image", prompt, width, height)
+            if custom_result:
+                log.info("تصویر با موفقیت توسط Providerِ سفارشیِ تنظیم‌شده تولید شد (%s بایت)", len(custom_result))
+                return custom_result
+        except Exception as e:
+            log.warning("بررسیِ Providerِ سفارشیِ تصویری شکست خورد، ادامه با زنجیره‌ی پیش‌فرض: %s", e)
+
         providers = (
             ("pollinations", self._call_pollinations),
             ("deepai", self._call_deepai),
@@ -440,6 +450,43 @@ class ImageRouter:
             log.exception("ثبتِ لاگِ شکستِ تولید تصویر در دیتابیس هم ناموفق بود")
 
         return None
+
+    async def edit_image(
+        self,
+        image_bytes: bytes,
+        instruction: str,
+        mime: str = "image/jpeg",
+    ) -> Optional[bytes]:
+        """
+        ویرایش/تغییرِ استایلِ یک تصویرِ موجود (نه تولیدِ تصویرِ کاملاً تازه).
+        برخلافِ generate_image، این متد زنجیره‌ی Pollinations/DeepAI/Stable Horde رو
+        امتحان نمی‌کنه چون هیچ‌کدوم ورودیِ تصویری نمی‌گیرن؛ فقط Providerِ چندوجهیِ
+        تنظیم‌شده در مدیریتِ API (فعلاً Gemini) این کار رو انجام می‌ده.
+        اگه هیچ Providerِ مناسبی تنظیم نشده باشه، None برمی‌گرده و caller باید پیامِ
+        روشنی (مثلِ «کلیدِ Gemini رو در مدیریتِ API تنظیم کن») به کاربر نشون بده.
+        """
+        if not image_bytes or not instruction or not instruction.strip():
+            return None
+
+        self._last_error = None
+        try:
+            from .ai_provider_manager import try_custom_image
+            result = await try_custom_image(
+                self.owner_user_id, "edit_image", instruction.strip(),
+                input_image=image_bytes, input_mime=mime,
+            )
+        except Exception as e:
+            log.warning("خطا در ویرایشِ تصویر با هوش مصنوعی: %s", e)
+            self._last_error = f"edit_image: {e}"
+            return None
+
+        if result:
+            log.info("تصویر با موفقیت ویرایش شد (%s بایت)", len(result))
+        else:
+            self._last_error = (
+                "هیچ Providerِ چندوجهی‌ای (Gemini) برای ویرایشِ تصویر تنظیم نشده یا موقتاً در دسترس نیست"
+            )
+        return result
 
     async def check_status(self) -> dict:
         """

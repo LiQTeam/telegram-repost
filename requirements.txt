@@ -5,6 +5,10 @@
 # ---------------- هسته‌ی ربات (همیشه لازم) ----------------
 python-telegram-bot[job-queue]==21.6
 httpx==0.27.2
+# فقط برایِ پروکسیِ SOCKS5 روی Gemini لازمه (GEMINI_PROXY_URL در .env). بدونِ
+# این پکیج، هر httpx.AsyncClient(proxy="socks5://...") مستقیماً ImportError
+# می‌ده (نگاه کن به bot/config.py::GEMINI_PROXY_URL).
+socksio==1.0.0
 # ---------------- سرورِ API برای اکستنشنِ مرورگر ----------------
 aiohttp==3.10.10
 beautifulsoup4==4.12.3

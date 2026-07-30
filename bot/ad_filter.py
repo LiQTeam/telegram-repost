@@ -528,6 +528,7 @@ def analyze(
         reason_text = "هیچ نشانه‌ی تبلیغاتیِ روشنی پیدا نشد"
     else:
         reason_text = "؛ ".join(reasons)
+    detail["rule_reason_text"] = reason_text
     return is_ad, reason_text, detail
 
 

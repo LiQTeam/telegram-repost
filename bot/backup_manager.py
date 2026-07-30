@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 from datetime import datetime, timedelta
 
@@ -667,7 +668,20 @@ class BackupManager:
         # این کلیدهای سطحِ بالا جدولِ دیتابیس نیستن (تنظیماتِ .env و فایل‌های
         # الگوی واترمارک)، پس نباید به‌عنوانِ جدول با آن‌ها رفتار بشه.
         _non_table_keys = {"backup_metadata", "env_config", "watermark_templates"}
-        tables_in_backup = [k for k in data.keys() if k not in _non_table_keys]
+        _valid_table_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        tables_in_backup = [
+            k for k in data.keys()
+            if k not in _non_table_keys and _valid_table_name.match(k)
+        ]
+        _rejected_table_keys = [
+            k for k in data.keys()
+            if k not in _non_table_keys and not _valid_table_name.match(k)
+        ]
+        if _rejected_table_keys:
+            log.warning(
+                "کلید(های) %s در فایلِ بکاپ به‌عنوانِ نامِ جدول نامعتبرن (کاراکترهای غیرمجاز) و "
+                "به‌خاطرِ جلوگیری از SQL injection نادیده گرفته شدن.", _rejected_table_keys,
+            )
         restored_tables: list[str] = []
         skipped_tables: list[str] = []
         failed_tables: list[str] = []

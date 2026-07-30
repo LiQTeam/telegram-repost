@@ -1,6 +1,10 @@
 """
 پکیج اصلی ربات ری‌پست هوشمند MR LiQ
-نسخه 2.0.0 - با تمام قابلیت‌های جدید (۱۰ گانه)
+
+⚠️ این فایل عمداً «همه‌ی» ماژول‌ها را eager import نمی‌کند. ماژول‌های سنگین یا
+اختیاری (ai_adapters/ai_provider_manager/web_search/manual_poster/auto_poster/…)
+هرکدام سرِ جای خودشان lazy وارد می‌شوند تا زمانِ بالا آمدنِ ربات کوتاه بماند؛
+فهرستِ زیر فقط هسته‌ی همیشه-لازم است.
 """
 from . import (
     config,
@@ -31,7 +35,7 @@ from . import (
     handlers,
 )
 
-__version__ = "2.0.0"
+__version__ = "2.4.0"
 __author__ = "MR LiQ Team"
 
 __all__ = [

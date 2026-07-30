@@ -179,7 +179,20 @@ _raw2 = f'<div>👑 کانفیگ فیلترشکن\n🇵🇱🇩🇪🇺🇸 مو
 _full2 = poster.build_message_html(_cph2(_BS2(_raw2,'html.parser').div,'Src'), channel_id=1, destination_id=None, limit=10**7)
 _ch = poster._split_message_html(_full2, 4096)
 check("split.blank_before_bq_kept", "\n\n<blockquote" in _ch[0], repr(_ch[0][:80]))
-check("split.header_flag_relocated", "سرور : 🇵🇱🇩🇪🇺🇸" in _ch[0], "")
+# پستی که نقل‌قولِ کانفیگ دارد، کپشنِ متغیرِ کانالِ مبدأ («کانفیگ فیلترشکن» /
+# «موقعیت سرور : 🇵🇱🇩🇪🇺🇸») را از دست می‌دهد و کپشنِ ثابتِ ربات جایش می‌نشیند
+# (formatter.apply_fixed_config_caption) — پس دیگر نباید دنبالِ جابه‌جاییِ پرچمِ
+# آن هدر بود؛ ثابتِ درست این است که کپشنِ ثابت آمده و هدرِ مبدأ کاملاً رفته.
+from bot.formatter import FIXED_CONFIG_CAPTION as _FIXED_CAP
+check("split.fixed_config_caption_applied", _FIXED_CAP in _ch[0], repr(_ch[0][:120]))
+check("split.source_header_dropped", "موقعیت سرور" not in _ch[0], repr(_ch[0][:120]))
 check("split.no_config_split2", sum(c.count("vless://") for c in _ch) == 60, sum(c.count("vless://") for c in _ch))
+
+# ---------- جابه‌جاییِ پرچمِ ابتدای خط (فقط برای پستِ *بدونِ* کانفیگ) ----------
+# این همون ثابتِ راست‌چینی است که تستِ قبلی می‌خواست بگیرد، ولی روی پستی که
+# کپشنِ ثابتِ کانفیگ آن را بازنویسی نمی‌کند.
+from bot.formatter import ensure_rtl_lines as _ertl
+_flagged = _ertl("🇵🇱🇩🇪🇺🇸 موقعیت سرور :\nمتنِ عادی")
+check("split.header_flag_relocated", "سرور : 🇵🇱🇩🇪🇺🇸" in _flagged, repr(_flagged))
 
 print("\n=== POSTER(4):", "ALL PASS" if not fails else f"{len(fails)} FAIL: {fails}")

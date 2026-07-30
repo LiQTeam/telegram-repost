@@ -29,7 +29,12 @@ cd "$SCRIPT_DIR"
 
 # ============================================================
 #  تنظیمات نصب — این مقادیر رو موقعِ اجرا از خودت می‌پرسه
-#  (هیچ توکن/کلید/آیدیِ واقعی توی این فایل ذخیره نمی‌شه)
+#
+#  ⚠️ هیچ توکن/کلید/آیدیِ واقعی نباید توی این فایل ذخیره بشه. این فایل داخلِ
+#  مخزنِ گیت است؛ هر مقداری که اینجا هاردکد بشه عملاً منتشر شده و باید فوراً
+#  باطل/جایگزین بشه. برای نصبِ بدونِ تعامل (اسکریپتی/CI) همین متغیرها رو
+#  به‌عنوانِ متغیرِ محیطی پاس بده، مثلاً:
+#      BOT_TOKEN=... ADMIN_IDS=... ./install.sh
 # ============================================================
 TZ_VALUE="Asia/Tehran"
 SERVICE_NAME="mrliq-bot"
@@ -37,11 +42,12 @@ PANEL_CMD="mrliq"
 
 echo ""
 title "=== تنظیمات اولیه‌ی ربات ==="
-read -rp "توکن ربات تلگرام (از @BotFather): " BOT_TOKEN
-read -rp "آیدی عددیِ ادمین(ها) (با کاما جدا کن اگه چندتان): " ADMIN_IDS
-read -rp "آیدی عددیِ کانال مقصدِ پیش‌فرض (مثلاً -1001234567890) [اختیاری، Enter=رد شو]: " DEFAULT_DEST_ID
-read -rp "Mistral API Key [اختیاری، Enter=رد شو]: " MISTRAL_API_KEY
-read -rp "Groq API Key [اختیاری، Enter=رد شو]: " GROQ_API_KEY
+# هر کدام که از قبل به‌صورتِ متغیرِ محیطی داده شده باشه، پرسیده نمی‌شه.
+[[ -n "${BOT_TOKEN:-}" ]]       || read -rp "توکن ربات تلگرام (از @BotFather): " BOT_TOKEN
+[[ -n "${ADMIN_IDS:-}" ]]      || read -rp "آیدی عددیِ ادمین(ها) (با کاما جدا کن اگه چندتان): " ADMIN_IDS
+[[ -n "${DEFAULT_DEST_ID:-}" ]] || read -rp "آیدی عددیِ کانال مقصدِ پیش‌فرض (مثلاً -1001234567890) [اختیاری، Enter=رد شو]: " DEFAULT_DEST_ID
+[[ -n "${MISTRAL_API_KEY:-}" ]] || read -rp "Mistral API Key [اختیاری، Enter=رد شو]: " MISTRAL_API_KEY
+[[ -n "${GROQ_API_KEY:-}" ]]   || read -rp "Groq API Key [اختیاری، Enter=رد شو]: " GROQ_API_KEY
 echo ""
 
 if [[ -z "${BOT_TOKEN// }" ]]; then
@@ -49,17 +55,14 @@ if [[ -z "${BOT_TOKEN// }" ]]; then
   exit 1
 fi
 
-# کاربران پیش‌فرض (اسم|آیدی عددی کانال/گروه تایید اختصاصی|آیدی عددی تلگرام کاربر)
-# اگه می‌خوای موقع نصب چند نفر رو با کانال تاییدِ اختصاصی اضافه کنی، اینجا
-# اضافه کن؛ فرمت هر آیتم: "اسم|آیدی کانال تایید|آیدی تلگرام کاربر (اختیاری)"
-# مثال: "علی|-1001111111111|123456789"
-DEFAULT_USERS=(
-)
+# کاربرانی که می‌خوای موقعِ نصب با کانالِ تاییدِ اختصاصی اضافه بشن.
+# فرمتِ هر آیتم: "اسم|آیدی کانال تایید|آیدی تلگرام کاربر (اختیاری)"
+# مثال: DEFAULT_USERS=("علی|-1001111111111|123456789")
+DEFAULT_USERS=()
 
-# کانال‌های مبدأیی که می‌خوای موقع نصب به‌صورت خودکار اضافه بشن (یوزرنیم بدون @)
+# کانال‌های مبدأیی که می‌خوای موقعِ نصب خودکار اضافه بشن (یوزرنیم بدونِ @).
 # مثال: DEFAULT_SOURCE_CHANNELS=(somechannel anotherchannel)
-DEFAULT_SOURCE_CHANNELS=(
-)
+DEFAULT_SOURCE_CHANNELS=()
 
 # ============================================================
 #  هدر
@@ -84,6 +87,8 @@ if command -v apt-get >/dev/null 2>&1; then
         curl \
         wget \
         git \
+        gnupg \
+        lsb-release \
         fonts-dejavu-core \
         build-essential \
         >/dev/null
@@ -123,6 +128,128 @@ fi
 PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 ok "پایتون نسخه $PY_VERSION نصب است."
 ok "پیش‌نیازهای سیستمی آماده‌ست."
+
+# ============================================================
+#  پروکسی Cloudflare WARP برای Gemini (کاملاً خودکار)
+# ============================================================
+#  روی بعضی سرورها (مخصوصاً سرورهای ایران یا هر آی‌پی‌ای که گوگل بلاکش
+#  کرده) تماسِ مستقیم به Gemini API با خطای ۴۰۳ (User location is not
+#  supported) مواجه می‌شه و ماژول‌های AI که از Gemini استفاده می‌کنن کار
+#  نمی‌کنن. این بخش یک تونل WARP در «حالت پروکسی» می‌سازه (فقط پورتِ
+#  لوکالِ ${WARP_PROXY_PORT:-40000} رو پروکسی می‌کنه، نه کل شبکه‌ی سرور -
+#  پس SSH و بقیه‌ی سرویس‌ها هیچ تأثیری نمی‌بینن) و در صورتِ موفقیت،
+#  GEMINI_PROXY_URL رو خودش توی .env می‌ذاره تا bot/ai_adapters.py (که
+#  از GEMINI_PROXY_URL در bot/config.py می‌خونه) خودکار ازش استفاده کنه.
+#  اگه نصبِ WARP به هر دلیلی شکست بخوره، این بخش فقط هشدار می‌ده و
+#  نصبِ بات رو متوقف نمی‌کنه - GEMINI_PROXY_URL خالی می‌مونه و ربات
+#  بدونِ پروکسی (مستقیم) کار می‌کند.
+# ============================================================
+GEMINI_PROXY_URL_VALUE=""
+WARP_PROXY_PORT=40000
+
+# اجرای یک زیردستورِ warp-cli بدونِ اینکه با «set -e» کلِ اسکریپت رو
+# در صورتِ شکست بترکونه (چون این مرحله باید «best effort» بمونه).
+warp_run() { "$@" >/dev/null 2>&1; }
+
+setup_cloudflare_warp_proxy() {
+    echo ""
+    title "------------------------------------------------------------"
+    info "بررسی و راه‌اندازی خودکارِ پروکسیِ Cloudflare WARP برای Gemini..."
+    title "------------------------------------------------------------"
+
+    if ! command -v apt-get >/dev/null 2>&1; then
+        warn "این مرحله فقط روی سیستم‌های مبتنی بر apt (اوبونتو/دبیان) خودکاره؛ رد شد."
+        return 0
+    fi
+
+    # ------------------------------------------------------------
+    # نصبِ کلاینتِ WARP (اگه از قبل نصب نباشه)
+    # ------------------------------------------------------------
+    if ! command -v warp-cli >/dev/null 2>&1; then
+        info "در حال نصب کلاینت Cloudflare WARP..."
+        mkdir -p /usr/share/keyrings
+        if curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null; then
+            echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs 2>/dev/null || echo stable) main" \
+                > /etc/apt/sources.list.d/cloudflare-client.list
+            if apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1; then
+                ok "کلاینت Cloudflare WARP نصب شد."
+            else
+                warn "نصب کلاینت WARP ناموفق بود؛ Gemini بدونِ پروکسی (مستقیم) کار خواهد کرد."
+                return 0
+            fi
+        else
+            warn "دریافتِ کلید امنیتیِ WARP ناموفق بود؛ Gemini بدونِ پروکسی (مستقیم) کار خواهد کرد."
+            return 0
+        fi
+    else
+        ok "کلاینت Cloudflare WARP از قبل نصب است."
+    fi
+
+    if ! command -v warp-cli >/dev/null 2>&1; then
+        warn "warp-cli بعد از نصب پیدا نشد؛ این مرحله رد شد."
+        return 0
+    fi
+
+    # ------------------------------------------------------------
+    # اطمینان از بالا بودنِ سرویسِ warp-svc
+    # ------------------------------------------------------------
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now warp-svc >/dev/null 2>&1 || true
+        local i
+        for i in $(seq 1 10); do
+            warp_run warp-cli status && break
+            sleep 1
+        done
+    fi
+
+    # ------------------------------------------------------------
+    # ثبت‌نام (فقط اگه از قبل ثبت‌نام نشده باشه - جلوگیری از ساختِ
+    # ثبت‌نامِ تکراری روی سرورهایی که install.sh دوباره اجرا می‌شه)
+    # ------------------------------------------------------------
+    if ! warp_run warp-cli account; then
+        info "در حال ثبت‌نامِ دستگاه در Cloudflare WARP..."
+        (yes | warp-cli --accept-tos registration new >/dev/null 2>&1) || \
+        (yes | warp-cli registration new >/dev/null 2>&1) || true
+    else
+        ok "دستگاه از قبل در Cloudflare WARP ثبت‌نام شده است."
+    fi
+
+    # ------------------------------------------------------------
+    # تنظیمِ حالتِ پروکسی (SOCKS5) + پورتِ اختصاصی
+    # ------------------------------------------------------------
+    info "تنظیمِ WARP روی حالتِ پروکسی (SOCKS5, پورتِ ${WARP_PROXY_PORT})..."
+    warp_run warp-cli mode proxy || warp_run warp-cli set-mode proxy
+    warp_run warp-cli proxy port "${WARP_PROXY_PORT}" || warp_run warp-cli set-proxy-port "${WARP_PROXY_PORT}"
+
+    # ------------------------------------------------------------
+    # اتصال
+    # ------------------------------------------------------------
+    warp_run warp-cli connect
+    sleep 3
+
+    # ------------------------------------------------------------
+    # تستِ واقعیِ عملکردِ پروکسی روی خودِ دامنه‌ی Gemini (نه فقط بالا
+    # بودنِ سرویس) - هر کدِ HTTP معتبر یعنی درخواست واقعاً از پروکسی
+    # تا سرورِ گوگل رفته و برگشته (۴۰۴/۴۰۳ روی مسیرِ ریشه طبیعیه).
+    # ------------------------------------------------------------
+    info "تستِ عملکردِ پروکسی روی سرورِ Gemini..."
+    local HTTP_CODE
+    HTTP_CODE=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" \
+        -x "socks5h://127.0.0.1:${WARP_PROXY_PORT}" \
+        "https://generativelanguage.googleapis.com/" 2>/dev/null || echo "000")
+
+    if [[ "$HTTP_CODE" =~ ^[2-4][0-9][0-9]$ ]]; then
+        ok "پروکسیِ WARP فعال و سالم است (کدِ پاسخِ گوگل: ${HTTP_CODE})."
+        GEMINI_PROXY_URL_VALUE="socks5://127.0.0.1:${WARP_PROXY_PORT}"
+        ok "GEMINI_PROXY_URL به‌صورت خودکار در .env تنظیم می‌شود."
+    else
+        warn "پروکسیِ WARP پاسخِ معتبر نداد (کدِ خام: ${HTTP_CODE})."
+        warn "GEMINI_PROXY_URL خالی می‌ماند؛ اگه بعداً Gemini کار نکرد، با دستور"
+        warn "  sudo systemctl status warp-svc  و  warp-cli status  بررسی کن."
+    fi
+}
+
+setup_cloudflare_warp_proxy
 
 # ============================================================
 #  حذف محیط مجازی قبلی و ساخت جدید
@@ -285,6 +412,14 @@ MISTRAL_API_KEY=${MISTRAL_API_KEY}
 GROQ_API_KEY=${GROQ_API_KEY}
 
 # ============================================================
+#  پروکسیِ Gemini (اگه سرور مستقیم به گوگل دسترسی نداشته باشه)
+#  این مقدار به‌صورت خودکار توسطِ install.sh و تونلِ Cloudflare WARP
+#  (حالتِ پروکسی، پورتِ محلیِ ${WARP_PROXY_PORT}) تنظیم شده. اگه خالیه
+#  یعنی پروکسی نساخته شده/کار نکرده و ربات مستقیم به Gemini وصل می‌شه.
+# ============================================================
+GEMINI_PROXY_URL=${GEMINI_PROXY_URL_VALUE}
+
+# ============================================================
 #  تنظیمات تشخیص واترمارک
 # ============================================================
 TEMPLATE_MATCH_THRESHOLD=0.75
@@ -302,25 +437,26 @@ info "آماده‌سازی دیتابیس..."
 if [ ! -f "cli.py" ]; then
     warn "فایل cli.py پیدا نشد، دیتابیس به‌صورت دستی تنظیم نمی‌شود."
 else
-    # افزودن کانال مقصد پیش‌فرض (اگه موقعِ نصب واردش کرده باشی)
+    # افزودن کانال مقصد پیش‌فرض (فقط اگه کاربر واقعاً آیدی داده باشه؛ وگرنه
+    # یک مقصدِ با آیدیِ خالی توی دیتابیس ساخته می‌شد که بعداً باید دستی پاک شه)
     if [[ -n "${DEFAULT_DEST_ID// }" ]]; then
         python3 cli.py add-destination "${DEFAULT_DEST_ID}" "مقصد پیش‌فرض" 2>/dev/null || true
         ok "کانال مقصد پیش‌فرض (${DEFAULT_DEST_ID}) اضافه شد."
-
-        # افزودن کانال‌های مبدأ (در صورت وجود)
-        for CH in "${DEFAULT_SOURCE_CHANNELS[@]}"; do
-            info "  افزودن کانال مبدأ @${CH}..."
-            python3 cli.py add-source "${CH}" "" --instant "--link=${DEFAULT_DEST_ID}" 2>/dev/null || true
-        done
-        if [[ ${#DEFAULT_SOURCE_CHANNELS[@]} -gt 0 ]]; then
-            ok "${#DEFAULT_SOURCE_CHANNELS[@]} کانال مبدأ اولیه اضافه شدند."
-        fi
     else
-        info "کانال مقصد پیش‌فرض وارد نشده؛ می‌تونی بعداً از داخل خودِ ربات اضافه‌اش کنی."
+        info "کانال مقصدِ پیش‌فرض وارد نشد؛ از داخلِ خودِ ربات اضافه‌اش کن."
     fi
 
+    # افزودن کانال‌های مبدأ (${...[@]+"${...[@]}"} یعنی روی آرایه‌ی خالی، زیرِ
+    # set -u، اصلاً بسط داده نشه)
+    for CH in ${DEFAULT_SOURCE_CHANNELS[@]+"${DEFAULT_SOURCE_CHANNELS[@]}"}; do
+        info "  افزودن کانال مبدأ @${CH}..."
+        python3 cli.py add-source "${CH}" "" --instant "--link=${DEFAULT_DEST_ID}" 2>/dev/null || true
+    done
+
+    ok "${#DEFAULT_SOURCE_CHANNELS[@]} کانال مبدأ اولیه اضافه شدند."
+
     # افزودن کاربران پیش‌فرض (هرکدام با کانال تایید و آیدی تلگرام اختصاصی خودشان)
-    for U in "${DEFAULT_USERS[@]}"; do
+    for U in ${DEFAULT_USERS[@]+"${DEFAULT_USERS[@]}"}; do
         U_NAME="${U%%|*}"
         U_REST="${U#*|}"
         U_APPROVAL="${U_REST%%|*}"
@@ -895,8 +1031,13 @@ handle() {
       echo -e "${C_DIM}Filtering for: error, exception, traceback, critical, failed${C_RESET}"
       srule
       trap '' INT
+      # فیکس: خط‌های وسطِ traceback (مثلِ File "bot/xxx.py", line 145, in func)
+      # هیچ‌کدوم از کلمه‌های کلیدی رو ندارن، پس با grep ساده حذف می‌شدن و
+      # دقیقاً همون فایل/خطی که برای دیباگ لازمه گم می‌شد. با -A 15 بعد از هر
+      # خطِ Match‌شده (مثلاً «Traceback (most recent call last):»)، ۱۵ خطِ
+      # بعدی هم چاپ می‌شه تا کلِ traceback (با فایل/خط دقیق) کامل بمونه.
       journalctl -u "$SERVICE_NAME" -f -n 500 2>/dev/null \
-        | grep --line-buffered -iE 'error|exception|traceback|critical|failed|refused' \
+        | grep --line-buffered -A 15 -iE 'error|exception|traceback|critical|failed|refused' \
         | while IFS= read -r line; do echo -e "${C_R}${line}${C_RESET}"; done
       trap - INT
       pause ;;

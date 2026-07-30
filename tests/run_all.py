@@ -19,6 +19,9 @@ MODULES = [
     "test_poster.py",
     "test_e2e.py",
     "test_button_colors.py",
+    "test_v240_modules.py",
+    "test_database.py",
+    "test_menu_smoke.py",
 ]
 
 def main() -> int:
@@ -27,17 +30,28 @@ def main() -> int:
         print("\n" + "#" * 72)
         print("# RUNNING", m)
         print("#" * 72)
-        r = subprocess.run([sys.executable, os.path.join(HERE, m)], cwd=HERE)
-        if r.returncode != 0:
+        # ⚠️ فیکس: قبلاً فقط کدِ خروج چک می‌شد، ولی چند فایلِ تست (مثلِ
+        # test_formatter.py و test_poster.py) خطاهاشون رو فقط با چاپِ خطِ
+        # «FAIL ...» اعلام می‌کنن و بازهم با کدِ ۰ خارج می‌شن — یعنی یک
+        # رگرسیونِ واقعی می‌تونست بی‌سروصدا از کلِ سوییت رد بشه (و شد).
+        # حالا خروجی هم گرفته و دنبالِ نشانه‌ی FAIL می‌گردیم.
+        r = subprocess.run(
+            [sys.executable, os.path.join(HERE, m)],
+            cwd=HERE, capture_output=True, text=True,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        print(out, end="" if out.endswith("\n") else "\n")
+        has_fail_marker = any(
+            line.startswith("FAIL ") or " FAIL:" in line
+            for line in out.splitlines()
+        )
+        if r.returncode != 0 or has_fail_marker:
             failed.append(m)
-        # test files signal failures via the "FAIL" marker in their own summary;
-        # they exit 0 regardless, so also grep their output is not needed here —
-        # each file prints "ALL PASS" or "N FAIL". Treat non-zero exit as error.
     print("\n" + "=" * 72)
     if failed:
         print("SUITE RESULT: FAILURES in", failed)
         return 1
-    print("SUITE RESULT: all modules executed. Check each 'ALL PASS' line above.")
+    print(f"SUITE RESULT: ALL PASS ({len(MODULES)} modules)")
     return 0
 
 if __name__ == "__main__":

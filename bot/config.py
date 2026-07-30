@@ -87,6 +87,14 @@ MAX_WATERMARK_AREA_RATIO = float(os.getenv("MAX_WATERMARK_AREA_RATIO", "0.3"))
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# generativelanguage.googleapis.com (Gemini) از رنجِ آی‌پیِ خیلی از کشورها
+# (ازجمله ایران) با HTTP 403 بلاک می‌شه، برخلافِ Mistral/Groq/HuggingFace که
+# نیازی به پروکسی ندارن. اگر خالی باشه، درخواست‌های Gemini بدونِ پروکسیِ
+# مستقیم می‌رن (رفتارِ فعلی). فرمتِ مقدار: "socks5://host:port" یا
+# "http://host:port" (یوزر/پس هم پشتیبانی می‌شه: "socks5://user:pass@host:port").
+# نکته: برایِ socks5 پکیجِ socksio لازمه (توی requirements.txt اضافه شده).
+GEMINI_PROXY_URL = os.getenv("GEMINI_PROXY_URL", "")
+
 # ==================== API Keys برای تولید تصویر (Image Generation) ====================
 # ترتیب اولویت: Pollinations -> DeepAI -> Stable Horde
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
@@ -125,10 +133,18 @@ LAMA_MODEL_PATH = MODELS_DIR / "big-lama.pt"
 
 
 def setup_logging() -> logging.Logger:
-    """تنظیمات لاگینگ با لاگ‌فایل و خروجی کنسول"""
+    """تنظیمات لاگینگ با لاگ‌فایل و خروجی کنسول
+    فیکس: قبلاً فرمت فقط «تاریخ - نامِ ماژول - سطح - پیام» بود و هیچ‌جا فایل/
+    خط/تابعِ منشأِ لاگ رو نمی‌نوشت. چون خروجیِ همین StreamHandler همونیه که
+    systemd/journalctl می‌گیره (و منویِ «Live Log - error only» توی
+    install.sh دقیقاً همین جریان رو با grep فیلتر می‌کنه)، بدونِ این اطلاعات
+    دیباگ‌کردن از رویِ لاگِ زنده تقریباً غیرممکن بود. حالا هر خط شاملِ
+    filename:lineno در تابعه، پس خطاها/اکسپشن‌ها مستقیماً توی journalctl هم
+    منشأشون معلومه.
+    """
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d in %(funcName)s()] - %(message)s",
         handlers=[
             logging.FileHandler(LOG_FILE, encoding="utf-8"),
             logging.StreamHandler(),

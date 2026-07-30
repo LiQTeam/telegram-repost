@@ -12,7 +12,10 @@ from telegram.ext import ContextTypes
 from .. import ad_filter, ad_feedback_report, ai_watermark, cache, concurrency, sr_model, keyboards as kb
 from ..database import db, OVERRIDABLE_TOGGLES
 from ..formatter import ensure_rtl_lines
-from .common import authorized_only, has_perm, is_admin, is_owner, safe_edit
+from .common import (
+    authorized_only, has_perm, is_admin, is_owner, safe_edit, safe_answer,
+    is_expired_callback_query_error, scope_owner,
+)
 from ..jdatetime_utils import now_jalali, format_jalali_datetime
 
 log = logging.getLogger("repost_bot.menu")
@@ -709,20 +712,39 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data or ""
     uid = update.effective_user.id if update.effective_user else None
-    # ⚠️ باگِ مهم: قبلاً همین‌جا اول `await query.answer()` صدا زده می‌شد. هر
-    # callback_query در تلگرام فقط و فقط یک بار قابلِ answer شدنه؛ در نتیجه همه‌ی
-    # answer(..., show_alert=True) هایی که بعداً داخلِ _dispatch صدا زده می‌شدن
-    # (پیام‌های «⛔️ فقط ادمین»، «✅ وضعیت تغییر کرد»، «🗑 حذف شد» و ...) با خطای
-    # BadRequest شکست می‌خوردن؛ نه پاپ‌آپی نمایش داده می‌شد و نه کاربر می‌فهمید
-    # چی شد (فقط ارورِ سراسری لاگ می‌شد). حالا answerِ خالی به انتهای کار منتقل
-    # شده تا فقط وقتی هیچ answerی نخورده باشه اجرا بشه.
+    # ⚠️ باگِ مهم (فیکسِ قبلی): قبلاً همین‌جا اول `await query.answer()` صدا زده
+    # می‌شد. هر callback_query در تلگرام فقط و فقط یک بار قابلِ answer شدنه؛ در
+    # نتیجه همه‌ی answer(..., show_alert=True) هایی که بعداً داخلِ _dispatch صدا
+    # زده می‌شدن (پیام‌های «⛔️ فقط ادمین»، «✅ وضعیت تغییر کرد»، «🗑 حذف شد» و ...)
+    # با خطای BadRequest شکست می‌خوردن؛ نه پاپ‌آپی نمایش داده می‌شد و نه کاربر
+    # می‌فهمید چی شد (فقط ارورِ سراسری لاگ می‌شد). حالا answerِ خالی به انتهای
+    # کار منتقل شده تا فقط وقتی هیچ answerی نخورده باشه اجرا بشه.
+    #
+    # ⚠️ باگِ دوم (این فیکس): اون تغییر فقط answerِ خالیِ انتهایی رو امن کرده
+    # بود؛ ده‌ها جای دیگه‌ی این فایل/manual_poster.py/auto_poster/menu.py/
+    # custom_watermark.py مستقیماً `await query.answer("...", show_alert=True)`
+    # صدا می‌زنن و try/except ندارن. اگه پردازشِ آپدیت کند شده باشه (مثلاً یک
+    # کارِ سنگین قبلش) یا کاربر دوبار پشتِ سرِ هم دکمه رو زده باشه، همون
+    # BadRequestِ «Query is too old and response timeout expired or query id is
+    # invalid» از داخلِ یکی از این answerهای محافظت‌نشده raise می‌شد، از
+    # try/finally پایین رد می‌شد و مستقیم به هندلرِ سراسریِ خطا می‌رسید -
+    # نتیجه: هم لاگِ پر از تریس‌بکِ تکراری، هم اسپمِ پیامِ «یه خطای غیرمنتظره
+    # پیش اومد» توی چتِ/کانالِ کاربر (درحالی‌که خودِ عملیات، مثلاً approve پست،
+    # معمولاً از قبل با موفقیت انجام شده بود - فقط پاپ‌آپِ تاییدش نمایش داده
+    # نمی‌شد). الان این خطای خاص همین‌جا قورت داده می‌شه و بقیه‌ی خطاها
+    # (خطاهای واقعی) طبقِ قبل به هندلرِ سراسری می‌رسن.
     try:
         await _dispatch(data, query, context, uid)
+    except BadRequest as e:
+        if is_expired_callback_query_error(e):
+            log.warning(
+                "کالبک‌کوئریِ منقضی/نامعتبر حینِ پردازشِ «%s» (uid=%s) - نادیده گرفته شد: %s",
+                data, uid, e,
+            )
+            return
+        raise
     finally:
-        try:
-            await query.answer()
-        except Exception:
-            pass  # قبلاً داخلِ _dispatch answer شده - طبیعیه
+        await safe_answer(query)
 
 
 async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: int | None = None) -> None:
@@ -776,6 +798,8 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
         elif data in _WM_AI_ACTIONS:
             _granted = has_perm(uid, "wm")
         elif data.startswith("ai:") or data == "menu:ai_services":
+            _granted = has_perm(uid, "ai")
+        elif data.startswith("aiapi:"):
             _granted = has_perm(uid, "ai")
         elif data.startswith("input:"):
             # دکمه‌های عمومیِ ورودی (رد کردن/انصراف) همیشه برای همه‌ی کاربرانِ مجاز آزادن
@@ -1371,6 +1395,40 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
     if data.startswith("dst:remove:"):
         did = int(data.split(":")[2])
         await safe_edit(query, "⚠️ مطمئنی می‌خوای این کانال مقصد رو حذف کنی؟", kb.confirm_remove_destination_menu(did))
+        return
+
+    # ---------------- آمار و زمان‌بندیِ هوشمندِ هر مقصد ----------------
+    # ⚠️ فیکس: دکمه‌ی «📊 آمار و زمان‌بندی هوشمند» (kb.destination_detail_menu) و
+    # دکمه‌های داخلِ صفحه‌ش (kb.dst_smart_menu) از قبل ساخته می‌شدن ولی هیچ شاخه‌ای
+    # اینجا نداشتن؛ یعنی زدنِ اون دکمه‌ها هیچ کاری نمی‌کرد و فقط لاگِ
+    # «callback_data ناشناخته» می‌خورد. حالا هر دو به SmartScheduler وصل شدن.
+    async def _show_dst_smart(did_: int):
+        from ..smart_scheduler import SmartScheduler  # وارداتِ تنبل، مثلِ بقیه‌ی این فایل
+        d = db.get_destination(did_)
+        if not d:
+            await query.answer("این کانال دیگه وجود نداره.", show_alert=True)
+            return
+        title = _esc(d["title"] or d["chat_id"])
+        on = SmartScheduler.is_enabled(did_)
+        text = (
+            f"📊 <b>آمار و زمان‌بندیِ هوشمند</b>\n"
+            f"🎯 {title}\n"
+            f"{DIVIDER}\n"
+            f"🧠 وضعیت: {'🟢 فعال' if on else '🔴 غیرفعال'}\n\n"
+            f"{SmartScheduler.get_stats_text(did_)}"
+        )
+        await safe_edit(query, text, kb.dst_smart_menu(did_), ParseMode.HTML)
+
+    if data.startswith("dst:smarttoggle:"):
+        from ..smart_scheduler import SmartScheduler
+        did = int(data.split(":")[2])
+        SmartScheduler.set_enabled(did, not SmartScheduler.is_enabled(did))
+        await query.answer("✅ وضعیتِ زمان‌بندیِ هوشمند تغییر کرد.", show_alert=True)
+        await _show_dst_smart(did)
+        return
+
+    if data.startswith("dst:smart:"):
+        await _show_dst_smart(int(data.split(":")[2]))
         return
 
     # ---------------- تنظیماتِ اختصاصیِ هر مقصد (امضا + فیلترِ تبلیغات) ----------------
@@ -2715,16 +2773,197 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
             await safe_edit(query, "🔔 <b>تنظیمات اعلان‌های ادمین</b>", kb.notification_menu(), ParseMode.HTML)
             return
 
-    # ابزارهای مستقل هوش مصنوعی (ترجمه/خلاصه/بازنویسیِ هر متنِ دلخواه)
-    if data in ("ai:translate", "ai:summarize", "ai:rewrite"):
-        tool = data.split(":")[1]
-        labels = {"translate": "ترجمه به فارسی", "summarize": "خلاصه‌سازی", "rewrite": "بازنویسی خلاقانه"}
-        _set_awaiting(context, f"ai_tool_{tool}", "menu:ai_services")
+    # ==================== سیستمِ مدیریتِ API هوش مصنوعی (۱۶ سرویس) ====================
+    if data.startswith("aiapi:"):
+        from .ai_providers_menu import handle_callback as _aiapi_callback
+        await _aiapi_callback(data, query, context, uid)
+        return
+
+    if data == "ai:web_search":
+        from ..web_search import WebSearchSettings
         await safe_edit(
             query,
-            f"✍️ متنی که می‌خوای «{labels[tool]}» بشه رو بفرست:",
+            "🔎 <b>جست‌وجویِ وب (فقط SerpAPI)</b>\n"
+            f"{DIVIDER}\n"
+            f"{WebSearchSettings.status_text()}\n\n"
+            "یک ورودیِ واحد: کافیه بنویسی چی می‌خوای.\n"
+            "• اگه اولش «عکس/تصویر/کاور...» باشه → فقط عکس (بدونِ توضیح).\n"
+            "• اگه «خبر/اخبار» باشه → خبر با لینکِ سایت و جدیدترین‌ها بالا.\n"
+            "• در غیرِ این‌صورت → عکس.",
+            kb.ai_web_search_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    if data == "ai:web_search_go":
+        _set_awaiting(context, "ai_web_search", "menu:ai_services")
+        await safe_edit(
+            query,
+            "✍️ چی می‌خوای؟ مثال:\n"
+            "• «عکس گربه‌ی ایرانی»\n"
+            "• «اخبار هوش مصنوعی»\n"
+            "بنویس و بفرست:",
             kb.cancel_input_menu(),
         )
+        return
+
+    if data == "ai:web_settings":
+        from ..web_search import WebSearchSettings
+        await safe_edit(
+            query,
+            "⚙️ <b>تنظیمِ کلیدهایِ SerpAPI</b>\n"
+            f"{DIVIDER}\n"
+            f"{WebSearchSettings.status_text()}\n\n"
+            "🔑 تا ۵ کلیدِ SerpAPI می‌تونی وارد کنی؛ بعد از هر سرچ به‌طورِ خودکار "
+            "بینِ کلیدها می‌چرخه تا سهمیه‌ی رایگانِ همه‌شون یکنواخت مصرف بشه.\n"
+            "کلید رو از پنلِ serpapi.com بگیر (رایگان).",
+            kb.ai_web_settings_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    if data.startswith("ai:web_set:"):
+        idx = data.split(":", 2)[2]
+        _set_awaiting(context, f"ai_web_setkey:{idx}", "menu:ai_services")
+        await safe_edit(
+            query,
+            f"✍️ کلیدِ SerpAPI شماره‌ی {int(idx)+1} رو بفرست (برایِ پاک‌کردن، یک فاصله بفرست):",
+            kb.cancel_input_menu(),
+        )
+        return
+
+    if data == "ai:web_clear":
+        from ..web_search import WebSearchSettings
+        WebSearchSettings.clear_all()
+        await query.answer("✅ همه‌ی کلیدها پاک شدن.")
+        await safe_edit(
+            query,
+            f"⚙️ <b>تنظیمِ کلیدهایِ SerpAPI</b>\n{DIVIDER}\n{WebSearchSettings.status_text()}",
+            kb.ai_web_settings_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    # ابزارهای مستقل هوش مصنوعی (ترجمه/خلاصه/بازنویسی/اصلاح/هشتگ/پرامپت‌نویسِ هر متنِ دلخواه)
+    if data == "ai:translate":
+        await safe_edit(
+            query,
+            "🌐 <b>ترجمه‌ی هوشمند</b>\n"
+            f"{DIVIDER}\n"
+            "اول زبانِ مبدأ رو خودکار تشخیص می‌دم، بعد بر اساسِ انتخابِ تو ترجمه می‌کنم:",
+            kb.ai_translate_lang_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    if data.startswith("ai:translate_lang:"):
+        lang = data.split(":")[2]
+        _set_awaiting(context, f"ai_tool_translate:{lang}", "menu:ai_services")
+        await safe_edit(query, "✍️ متنی که می‌خوای ترجمه بشه رو بفرست:", kb.cancel_input_menu())
+        return
+
+    if data == "ai:summarize":
+        await safe_edit(
+            query,
+            "📝 <b>خلاصه‌سازیِ چندسطحی</b>\n"
+            f"{DIVIDER}\n"
+            "چقدر خلاصه می‌خوای؟",
+            kb.ai_summarize_level_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    if data.startswith("ai:summarize_level:"):
+        level = data.split(":")[2]
+        _set_awaiting(context, f"ai_tool_summarize:{level}", "menu:ai_services")
+        await safe_edit(query, "✍️ متنی که می‌خوای خلاصه بشه رو بفرست:", kb.cancel_input_menu())
+        return
+
+    if data in ("ai:rewrite", "ai:fix_text", "ai:hashtags",
+                "ai:caption", "ai:title", "ai:auto_reply", "ai:analyze_text"):
+        tool = {
+            "ai:rewrite": "rewrite", "ai:fix_text": "fix_text", "ai:hashtags": "hashtags",
+            "ai:caption": "generate_caption", "ai:title": "generate_title",
+            "ai:auto_reply": "auto_reply", "ai:analyze_text": "analyze_text",
+        }[data]
+        labels = {
+            "rewrite": "بازنویسیِ خلاقانه",
+            "fix_text": "اصلاحِ املا و گرامر",
+            "hashtags": "تولیدِ هشتگ",
+            "generate_caption": "تولیدِ کپشن",
+            "generate_title": "تولیدِ عنوان",
+            "auto_reply": "پاسخِ خودکار",
+            "analyze_text": "تحلیلِ متن",
+        }
+        _set_awaiting(context, f"ai_tool_{tool}", "menu:ai_services")
+        await safe_edit(query, f"✍️ متنی که می‌خوای «{labels[tool]}» بشه رو بفرست:", kb.cancel_input_menu())
+        return
+
+    if data == "ai:prompt_writer":
+        _set_awaiting(context, "ai_tool_prompt_writer", "menu:ai_services")
+        await safe_edit(
+            query,
+            "🧠 <b>پرامپت‌نویسِ تصویر</b>\n"
+            f"{DIVIDER}\n"
+            "ایده‌ت رو کوتاه بنویس (مثلاً «یک گربه‌ی فضانورد روی کهکشان»)؛ یک پرامپتِ حرفه‌ایِ انگلیسی، "
+            "دقیقاً طبقِ اصولِ Prompt Engineering، براش می‌سازم که مستقیم توی هر ابزارِ تولیدِ تصویری قابلِ استفاده‌ست.",
+            kb.cancel_input_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    # ==================== تغییرِ استایلِ عکس ====================
+    if data == "ai:style_image":
+        context.user_data.pop("ai_style_image_bytes", None)
+        _set_awaiting(context, "ai_style_photo", "menu:ai_services")
+        await safe_edit(
+            query,
+            "🎨 <b>تغییرِ استایلِ عکس</b>\n"
+            f"{DIVIDER}\n"
+            "اول خودِ عکس رو بفرست، بعد از بینِ استایل‌ها انتخاب کن.\n"
+            "⚠️ این قابلیت فقط با کلیدِ <b>Gemini</b> فعال (توی «مدیریتِ API هوش مصنوعی») کار می‌کنه.",
+            kb.cancel_input_menu(),
+            ParseMode.HTML,
+        )
+        return
+
+    if data.startswith("ai:style_preset:"):
+        preset = data.split(":")[2]
+        image_bytes = context.user_data.get("ai_style_image_bytes")
+        if not image_bytes:
+            await query.answer("❌ اول باید عکس رو بفرستی.", show_alert=True)
+            return
+        if preset == "custom":
+            _set_awaiting(context, "ai_tool_style_custom", "menu:ai_services")
+            await safe_edit(query, "✍️ استایلِ دلخواهت رو توضیح بده (مثلاً «تبدیل به نقاشیِ آبرنگِ رمانتیک»):", kb.cancel_input_menu())
+            return
+
+        style_labels = {
+            "oil": "a classical oil painting, visible brush strokes, rich textured canvas",
+            "sketch": "a detailed black and white pencil sketch, hand-drawn shading",
+            "cyberpunk": "a cyberpunk style with neon lights, futuristic city colors, high contrast",
+            "anime": "a Japanese anime / manga illustration style, clean lines, vibrant colors",
+            "3dcartoon": "a 3D cartoon render style, Pixar-like, soft lighting, playful colors",
+            "vintage": "a vintage retro photograph style, warm faded colors, film grain, 1970s look",
+        }
+        instruction = (
+            "Transform this image into " + style_labels.get(preset, preset) +
+            ". Keep the main subject, composition and identity recognizable; only change the artistic style."
+        )
+        await query.answer("⏳ در حال تغییرِ استایل...")
+        from ..image_router import ImageRouter
+        router = ImageRouter(owner_user_id=scope_owner(uid))
+        try:
+            result = await router.edit_image(image_bytes, instruction)
+        finally:
+            await router.close()
+        if not result:
+            await query.message.reply_text(
+                "❌ تغییرِ استایل انجام نشد. مطمئن شو کلیدِ Gemini در «مدیریتِ API هوش مصنوعی» فعال و معتبره.",
+                reply_markup=kb.ai_services_menu(),
+            )
+            return
+        await query.message.reply_photo(photo=result, caption="🎨 استایلِ عکس تغییر کرد.", reply_markup=kb.ai_services_menu())
         return
 
     # ==================== تولید تصویر با هوش مصنوعی ====================
@@ -2770,14 +3009,9 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
             await safe_edit(query, "📋 هیچ لاگی یافت نشد.", kb.logs_filter_menu())
             return
 
-        lines = ["📋 <b>لاگ‌های سیستم</b>\n" + DIVIDER]
-        for log_row in logs[:20]:
-            lines.append(
-                f"🕒 {log_row['jalali_date']}\n"
-                f"📌 {log_row['event_type']}\n"
-                f"📝 {log_row['message'][:100]}..."
-            )
-        await safe_edit(query, "\n\n".join(lines), kb.logs_filter_menu(), ParseMode.HTML)
+        from ..utils import build_logs_message
+        text = build_logs_message("📋 <b>لاگ‌های سیستم</b>\n" + DIVIDER, logs)
+        await safe_edit(query, text, kb.logs_filter_menu(), ParseMode.HTML)
         return
 
     # ==================== واترمارکِ دلخواهِ دستی روی یک پستِ خاص ====================
@@ -2885,7 +3119,7 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
         await query.answer("⏳ در حال پردازش با هوش مصنوعی...")
 
         from ..ai_router import AIRouter
-        router = AIRouter()
+        router = AIRouter(owner_user_id=row["owner_user_id"])
         try:
             if action == "translate":
                 new_caption = await router.translate_to_persian(caption)
@@ -2967,7 +3201,7 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
     if data == "ai:status_services":
         await query.answer("⏳ در حال تست زنده‌ی Groq و Mistral...")
         from ..ai_router import AIRouter, GROQ_MODEL, MISTRAL_MODEL
-        router = AIRouter()
+        router = AIRouter(owner_user_id=scope_owner(uid))
         try:
             status = await router.check_status()
         finally:
@@ -2986,7 +3220,8 @@ async def _dispatch(data: str, query, context: ContextTypes.DEFAULT_TYPE, uid: i
             "💡 اگه یکی از دو موتور خطا بده، ربات به‌صورت خودکار درخواست رو به موتور دیگه سوییچ می‌کنه.\n"
             "💡 این وضعیت هیچ ربطی به موتورهای پردازش تصویر (بخش واترمارک) نداره."
         )
-        await safe_edit(query, text, kb.ai_services_menu(), ParseMode.HTML)
+        from .ai_providers_menu import home_menu as _aiapi_home_menu
+        await safe_edit(query, text, _aiapi_home_menu(scope_owner(uid)), ParseMode.HTML)
         return
 
     # ==================== چت پیوسته با هوش مصنوعی ====================

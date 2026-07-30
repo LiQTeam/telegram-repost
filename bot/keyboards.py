@@ -1059,12 +1059,81 @@ def backup_ampm_menu(hour_12: int, minute: int) -> InlineKeyboardMarkup:
 
 
 def ai_services_menu() -> InlineKeyboardMarkup:
+    # برچسب‌ها از همان کاتالوگِ «مسیریابیِ وظایف» خوانده می‌شن تا نامِ هر سرویس در
+    # صفحه‌ی اصلیِ هوش مصنوعی و در مسیریابیِ وظایف همیشه دقیقاً یکی باشه (یک منبعِ
+    # حقیقتِ واحد). callbackها ثابت می‌مونن؛ فقط متنِ دکمه از کاتالوگ میاد.
+    from . import ai_catalog as _cat
+
+    def _lbl(task_id: str, fallback: str) -> str:
+        t = _cat.ALL_TASKS.get(task_id)
+        return t.label if t else fallback
+
     rows = [
-        [_btn("🌐 ترجمه به فارسی", "ai:translate"), _btn("📝 خلاصه‌سازی", "ai:summarize")],
-        [_btn("🔄 بازنویسی خلاقانه", "ai:rewrite"), _btn("🖼 تولید تصویر", "ai:image")],
+        [_btn(_lbl("translate", "🌐 ترجمه"), "ai:translate"),
+         _btn(_lbl("summarize", "📝 خلاصه‌سازی"), "ai:summarize"),
+         _btn(_lbl("rewrite", "🔄 بازنویسی"), "ai:rewrite")],
+        [_btn(_lbl("fix_text", "🩹 اصلاح املا/گرامر"), "ai:fix_text"),
+         _btn(_lbl("generate_hashtags", "#️⃣ تولید هشتگ"), "ai:hashtags"),
+         _btn(_lbl("prompt_writer", "🧠 پرامپت‌نویس"), "ai:prompt_writer")],
+        [_btn(_lbl("generate_caption", "💬 تولید کپشن"), "ai:caption"),
+         _btn(_lbl("generate_title", "🏷 تولید عنوان"), "ai:title")],
+        [_btn(_lbl("auto_reply", "🤖 پاسخ خودکار"), "ai:auto_reply"),
+         _btn(_lbl("analyze_text", "🔍 تحلیل متن"), "ai:analyze_text")],
+        [_btn(_lbl("generate_image", "🖼 تولید تصویر"), "ai:image"),
+         _btn(_lbl("edit_image", "🎨 تغییر استایل عکس"), "ai:style_image")],
+        [_btn("🔎 جست‌وجویِ وب", "ai:web_search")],
         [_btn("💬 چت با AI", "ai:request")],
-        [_btn("🧠 وضعیت AI", "ai:status_services")],
+        [_btn("🔌 مدیریتِ API هوش مصنوعی", "aiapi:home")],
         [_btn("🔙 بازگشت به منو", "menu:main")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_web_search_menu() -> InlineKeyboardMarkup:
+    # یک ورودیِ واحد؛ نوعِ جست‌وجو (عکس/خبر) از خودِ متن تشخیص داده می‌شه.
+    rows = [
+        [_btn("🔎 جست‌وجو (بنویس: «عکس ...» یا «اخبار ...»)", "ai:web_search_go")],
+        [_btn("⚙️ تنظیمِ کلیدهای SerpAPI", "ai:web_settings")],
+        [_btn("🔙 بازگشت", "menu:ai_services")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_web_settings_menu() -> InlineKeyboardMarkup:
+    from .web_search import MAX_KEYS
+    rows = [[_btn(f"🔑 کلیدِ SerpAPI شماره‌ی {i+1}", f"ai:web_set:{i}")] for i in range(MAX_KEYS)]
+    rows.append([_btn("🗑 پاک‌کردنِ همه‌ی کلیدها", "ai:web_clear")])
+    rows.append([_btn("🔙 بازگشت", "ai:web_search")])
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_translate_lang_menu() -> InlineKeyboardMarkup:
+    """انتخابِ زبانِ مقصد قبل از ترجمه‌ی هوشمند."""
+    rows = [
+        [_btn("🔁 خودکار (برعکسِ زبانِ متن)", "ai:translate_lang:auto")],
+        [_btn("🇮🇷 فارسی", "ai:translate_lang:fa"), _btn("🇬🇧 انگلیسی", "ai:translate_lang:en"), _btn("🇸🇦 عربی", "ai:translate_lang:ar")],
+        [_btn("🔙 بازگشت", "menu:ai_services")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_summarize_level_menu() -> InlineKeyboardMarkup:
+    """انتخابِ سطحِ خلاصه‌سازی قبل از دریافتِ متن."""
+    rows = [
+        [_btn("⚡️ فوق‌کوتاه", "ai:summarize_level:short"), _btn("📄 متوسط", "ai:summarize_level:medium"), _btn("📚 مفصل", "ai:summarize_level:detailed")],
+        [_btn("🔙 بازگشت", "menu:ai_services")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def ai_style_options_menu() -> InlineKeyboardMarkup:
+    """پریست‌هایِ آماده‌ی تغییرِ استایلِ عکس (بعد از دریافتِ خودِ عکس)."""
+    rows = [
+        [_btn("🎨 نقاشیِ رنگ‌روغن", "ai:style_preset:oil"), _btn("🖊 سیاه‌قلم", "ai:style_preset:sketch")],
+        [_btn("🌆 سایبرپانک", "ai:style_preset:cyberpunk"), _btn("🧊 انیمه", "ai:style_preset:anime")],
+        [_btn("🧱 سه‌بعدیِ کارتونی", "ai:style_preset:3dcartoon"), _btn("🕰 وینتیج", "ai:style_preset:vintage")],
+        [_btn("✍️ توضیحِ دلخواه...", "ai:style_preset:custom")],
+        [_btn("🔙 بازگشت", "menu:ai_services")],
     ]
     return InlineKeyboardMarkup(rows)
 

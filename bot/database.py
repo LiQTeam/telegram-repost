@@ -5,10 +5,14 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+import os
 import sqlite3
+import sys
 import threading
+import traceback
 from datetime import datetime, date
 from typing import Any, Optional
 
@@ -17,6 +21,64 @@ from . import config
 log = logging.getLogger("repost_bot.database")
 
 _lock = threading.Lock()
+
+# ریشه‌ی پروژه، برای این‌که مسیرِ فایل‌ها توی لاگ کوتاه و خوانا باشه
+# (مثلاً "bot/poster.py" به‌جای مسیرِ کاملِ سرور)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _short_path(path: str) -> str:
+    try:
+        rel = os.path.relpath(path, _PROJECT_ROOT)
+        return rel if not rel.startswith("..") else os.path.basename(path)
+    except Exception:
+        return os.path.basename(path)
+
+
+def _capture_log_debug_info() -> Optional[dict]:
+    """
+    مشخصاتِ فنیِ منشأِ یک لاگِ ERROR/WARNING رو جمع می‌کنه:
+    - فایل/خط/تابعی که واقعاً add_system_log رو صدا زده (نه خودِ database.py)
+    - اگه توی یک بلاکِ except صدا زده شده باشه، نوع/پیامِ استثنا و
+      آخرین فریمِ traceback (یعنی جایی که خطا واقعاً رخ داده، نه جایی که
+      catch شده) رو هم اضافه می‌کنه.
+    هیچ‌وقت نباید خودش استثنا پرتاب کنه؛ لاگ نباید به‌خاطرِ این کمکی خراب بشه.
+    """
+    info: dict = {}
+    try:
+        caller = None
+        for frame_info in inspect.stack()[1:8]:
+            if os.path.abspath(frame_info.filename) != os.path.abspath(__file__):
+                caller = frame_info
+                break
+        if caller:
+            info["caller_file"] = _short_path(caller.filename)
+            info["caller_line"] = caller.lineno
+            info["caller_function"] = caller.function
+    except Exception:
+        pass
+
+    try:
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        if exc_type is not None:
+            info["exception_type"] = exc_type.__name__
+            info["exception_message"] = str(exc_value)[:150]
+            frames = traceback.extract_tb(exc_tb)
+            if frames:
+                origin = frames[-1]  # فریمِ آخر = جایی که خطا واقعاً اتفاق افتاده
+                info["origin_file"] = _short_path(origin.filename)
+                info["origin_line"] = origin.lineno
+                info["origin_function"] = origin.name
+                info["origin_code"] = (origin.line or "").strip()[:200]
+                # یک ردِ فشرده از کل زنجیره‌ی فراخوانی (حداکثر ۵ فریمِ آخر)
+                info["trace_chain"] = [
+                    f"{_short_path(f.filename)}:{f.lineno} در {f.name}()"
+                    for f in frames[-5:]
+                ]
+    except Exception:
+        pass
+
+    return info or None
 
 SLOTS_PER_CHANNEL = 7
 DEFAULT_SLOT_TIMES = ["08:00", "10:30", "13:00", "15:30", "18:00", "20:30", "23:00"]
@@ -295,6 +357,7 @@ CREATE TABLE IF NOT EXISTS pending_posts (
     admin_chat_id       INTEGER,
     admin_message_id    INTEGER,
     flag_reason        TEXT DEFAULT '',
+    ad_filter_detail   TEXT DEFAULT '',              -- جزئیاتِ ساختاریافته‌ی موتورِ فیلترِ تبلیغات (JSON: score/threshold/llm/llm2/keywords/...) - برایِ خروجیِ اکسلِ فیدبک، نگاه کن به ad_feedback_report.py
     ad_feedback        TEXT DEFAULT '',              -- فیدبکِ ادمین به تشخیصِ فیلترِ تبلیغات: ''/'correct'/'incorrect'
     flag_chat_id        INTEGER,        -- چت/پیامِ ریپلایِ توضیحاتِ فلگ (مکانیزمِ قدیمی‌تر؛ نگاه کن به set_pending_flag_message - فعلاً پیش‌فرض ازش استفاده نمی‌شه چون دکمه‌ها مستقیم رویِ خودِ پست‌ان)
     flag_message_id     INTEGER,
@@ -462,6 +525,75 @@ CREATE TABLE IF NOT EXISTS watermark_destinations (
     destination_id INTEGER NOT NULL,
     PRIMARY KEY (watermark_id, destination_id)
 );
+
+-- ==========================================================================
+-- سیستمِ مدیریتِ API هوش مصنوعی (متنی + تصویری، ۱۶ سرویس) - ایزوله بین
+-- ادمین (owner_user_id = NULL) و هر کاربر (owner_user_id = users.id). دقیقاً
+-- مثلِ الگویِ channels/destinations، برای یکتاییِ (owner, service) از یک
+-- UNIQUE INDEX جدا با COALESCE استفاده می‌شه چون NULL در UNIQUE ستونیِ
+-- SQLite هیچ‌وقت با NULL دیگه‌ای برابر در نظر گرفته نمی‌شه.
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS ai_providers (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id       INTEGER,
+    service_id          TEXT NOT NULL,
+    api_key_encrypted   TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'not_set',
+    status_detail       TEXT NOT NULL DEFAULT '',
+    last_checked_at     TEXT NOT NULL DEFAULT '',
+    total_requests      INTEGER NOT NULL DEFAULT 0,
+    total_errors        INTEGER NOT NULL DEFAULT 0,
+    total_response_ms   INTEGER NOT NULL DEFAULT 0,
+    last_used_at        TEXT NOT NULL DEFAULT '',
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_providers_owner_service
+    ON ai_providers (COALESCE(owner_user_id, 0), service_id);
+CREATE INDEX IF NOT EXISTS idx_ai_providers_owner ON ai_providers(owner_user_id);
+
+-- چندکلیدی: به‌ازایِ هر (owner, service) تا ۵ کلیدِ API قابلِ ثبته (slot ۱ تا ۵).
+-- وقتی چند اکانت برایِ یک سرویس (مثلاً چند اکانتِ Gemini) داری، بعدِ اتمامِ
+-- Quota یک کلید یا به‌طورِ چرخشی بعدِ هر درخواست، خودکار می‌ره سراغِ کلیدِ بعدی.
+-- منطقِ چرخش/Fallback در ai_provider_manager.py (_pick_key / call_text / call_image).
+CREATE TABLE IF NOT EXISTS ai_provider_keys (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id       INTEGER,
+    service_id          TEXT NOT NULL,
+    slot                INTEGER NOT NULL,
+    label               TEXT NOT NULL DEFAULT '',
+    api_key_encrypted   TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'not_set',
+    status_detail       TEXT NOT NULL DEFAULT '',
+    last_checked_at     TEXT NOT NULL DEFAULT '',
+    cooldown_until      TEXT NOT NULL DEFAULT '',
+    total_requests      INTEGER NOT NULL DEFAULT 0,
+    total_errors        INTEGER NOT NULL DEFAULT 0,
+    total_response_ms   INTEGER NOT NULL DEFAULT 0,
+    last_used_at        TEXT NOT NULL DEFAULT '',
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_provider_keys_owner_service_slot
+    ON ai_provider_keys (COALESCE(owner_user_id, 0), service_id, slot);
+CREATE INDEX IF NOT EXISTS idx_ai_provider_keys_owner_service
+    ON ai_provider_keys (COALESCE(owner_user_id, 0), service_id);
+
+-- مسیریابیِ وظایف: برایِ هر (owner, task) یک Provider اصلی و یک Provider
+-- زاپاس (Fallback) اختیاری. اگه provider_service_id خالی باشه یعنی «پیش‌فرضِ
+-- سیستم» (کلیدهایِ .env / منطقِ داخلیِ فعلی) استفاده می‌شه.
+CREATE TABLE IF NOT EXISTS ai_task_routes (
+    owner_user_id         INTEGER,
+    task_id               TEXT NOT NULL,
+    provider_service_id   TEXT NOT NULL DEFAULT '',
+    fallback_service_id   TEXT NOT NULL DEFAULT '',
+    updated_at            TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_task_routes_owner_task
+    ON ai_task_routes (COALESCE(owner_user_id, 0), task_id);
 """
 
 DEFAULT_USER_PERMISSIONS: dict[str, bool] = {
@@ -536,6 +668,11 @@ class Database:
                 "مهاجرتِ رفعِ یکتاییِ سراسریِ کانال/مقصد (اجازه‌ی ثبتِ یک کانال توسطِ چند مالک) شکست خورد: %s",
                 e,
             )
+            raise
+        try:
+            self._migrate_ai_provider_keys_from_legacy()
+        except sqlite3.Error as e:
+            log.exception("مهاجرتِ کلیدهایِ تک‌اسلاتیِ قدیمیِ AI به سیستمِ چندکلیدی شکست خورد: %s", e)
             raise
 
     def _init_schema(self):
@@ -615,6 +752,13 @@ class Database:
                 self._conn.execute("ALTER TABLE pending_posts ADD COLUMN flag_chat_id INTEGER")
             if "flag_message_id" not in pending_cols:
                 self._conn.execute("ALTER TABLE pending_posts ADD COLUMN flag_message_id INTEGER")
+            if "ad_filter_detail" not in pending_cols:
+                # جزئیاتِ ساختاریافته‌ی موتورِ فیلترِ تبلیغات (JSON) به‌ازایِ هر پستی
+                # که به‌خاطرِ مشکوک‌بودن به تبلیغ به صفِ تایید افتاده: امتیاز/آستانه‌ی
+                # موتورِ قاعده‌محور، نتیجه‌ی هر داورِ AI، کلیدواژه‌های تطبیق‌یافته و....
+                # پست‌های قدیمی که این ستون رو ندارن، خالی می‌مونه (در اکسل فقط
+                # ستون‌های ساختاریافته‌شون خالی می‌مونه، بدونِ خطا).
+                self._conn.execute("ALTER TABLE pending_posts ADD COLUMN ad_filter_detail TEXT DEFAULT ''")
 
             user_cols = {
                 row["name"] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()
@@ -650,6 +794,46 @@ class Database:
                 # فقط تطابقِ دقیقِ هش). NULL برای ردیف‌های قدیمی، بی‌مشکل.
                 self._conn.execute("ALTER TABLE duplicate_log ADD COLUMN dup_words TEXT")
 
+            ai_prov_cols = {
+                row["name"] for row in self._conn.execute("PRAGMA table_info(ai_providers)").fetchall()
+            }
+            if "rotation_cursor" not in ai_prov_cols:
+                # اشاره‌گرِ چرخشِ کلیدها: بعدِ هر فراخوانیِ موفق روی slotِ بعدی
+                # تنظیم می‌شه تا درخواست‌هایِ بعدی به‌طورِ چرخشی بینِ کلیدهایِ
+                # ثبت‌شده‌ی این سرویس (ai_provider_keys) تقسیم بشن.
+                self._conn.execute("ALTER TABLE ai_providers ADD COLUMN rotation_cursor INTEGER NOT NULL DEFAULT 0")
+
+            self._conn.commit()
+
+    def _migrate_ai_provider_keys_from_legacy(self):
+        """کلیدِ تک‌اسلاتیِ قدیمیِ هر (owner, service) در ai_providers رو - اگه
+        هنوز توی ai_provider_keys منتقل نشده - به‌عنوانِ slot=1 کپی می‌کنه، تا
+        کاربرهایی که از قبلِ این آپدیت یک کلید ثبت کرده بودن چیزی رو از دست
+        ندن. Idempotent: فقط وقتی این (owner, service) هیچ ردیفی توی
+        ai_provider_keys نداشته باشه اجرا می‌شه."""
+        with _lock:
+            legacy_rows = self._conn.execute(
+                "SELECT * FROM ai_providers WHERE api_key_encrypted != ''"
+            ).fetchall()
+            for row in legacy_rows:
+                exists = self._conn.execute(
+                    "SELECT 1 FROM ai_provider_keys WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+                    (row["owner_user_id"], row["service_id"]),
+                ).fetchone()
+                if exists:
+                    continue
+                self._conn.execute(
+                    """INSERT INTO ai_provider_keys
+                       (owner_user_id, service_id, slot, api_key_encrypted, status, status_detail,
+                        last_checked_at, total_requests, total_errors, total_response_ms, last_used_at)
+                       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        row["owner_user_id"], row["service_id"], row["api_key_encrypted"],
+                        row["status"], row["status_detail"], row["last_checked_at"],
+                        row["total_requests"], row["total_errors"], row["total_response_ms"],
+                        row["last_used_at"],
+                    ),
+                )
             self._conn.commit()
 
     def _migrate_channel_dest_ownership_unique(self):
@@ -2082,14 +2266,15 @@ class Database:
         flag_reason: str = "",
         owner_user_id: int | None = None,
         body_html: str = "",
+        ad_filter_detail: str = "",
     ) -> int:
         with _lock:
             cur = self._conn.execute(
                 "INSERT INTO pending_posts "
-                "(channel_id, source_post_id, caption_html, original_caption_html, body_html, media_json, status, flag_reason, owner_user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                "(channel_id, source_post_id, caption_html, original_caption_html, body_html, media_json, status, flag_reason, owner_user_id, ad_filter_detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
                 (channel_id, source_post_id, caption_html, caption_html, body_html,
-                 json.dumps(media, ensure_ascii=False), flag_reason, owner_user_id),
+                 json.dumps(media, ensure_ascii=False), flag_reason, owner_user_id, ad_filter_detail),
             )
             self._conn.commit()
             return cur.lastrowid
@@ -2307,7 +2492,8 @@ class Database:
         به یک مالک - نگاه کن به _ad_feedback_owner_clause."""
         clause, params = self._ad_feedback_owner_clause(owner_user_id)
         q = (
-            "SELECT id, channel_id, caption_html, body_html, flag_reason, ad_feedback, created_at "
+            "SELECT id, channel_id, caption_html, body_html, flag_reason, ad_feedback, "
+            "ad_filter_detail, created_at "
             "FROM pending_posts p WHERE p.ad_feedback IN ('correct','incorrect')" + clause
         )
         if channel_id is not None:
@@ -2551,6 +2737,16 @@ class Database:
                        post_id: int = None, status: str = None) -> None:
         from .jdatetime_utils import now_jalali, format_jalali_datetime
         jalali_date = format_jalali_datetime(now_jalali())
+        # فیکس: برای خطاها (ERROR/WARNING) به‌صورتِ خودکار مشخصاتِ فنیِ منشأ
+        # ارور (فایل/خط/تابعِ فراخوان + اگه داخلِ except بودیم، نوع/پیامِ
+        # استثنا و آخرین فریمِ traceback که واقعاً باعثِ خطا شده) رو به details
+        # اضافه می‌کنیم تا از منویِ «لاگ‌ها» بدونِ نیاز به لاگِ خامِ سرور بشه
+        # فهمید ارور از کدوم فایل و برای چه دلیلی اومده.
+        if severity in ("ERROR", "WARNING"):
+            debug_info = _capture_log_debug_info()
+            if debug_info:
+                details = dict(details) if details else {}
+                details["_debug"] = debug_info
         with _lock:
             self._conn.execute(
                 """INSERT INTO system_logs
@@ -2590,6 +2786,229 @@ class Database:
     def get_settings_by_prefix(self, prefix: str) -> dict:
         rows = self._conn.execute("SELECT key, value FROM settings WHERE key LIKE ?", (prefix + "%",)).fetchall()
         return {row["key"]: row["value"] for row in rows}
+
+    # ==================== سیستمِ مدیریتِ API هوش مصنوعی ====================
+    def ai_get_provider(self, owner_user_id: Optional[int], service_id: str) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+            (owner_user_id, service_id),
+        ).fetchone()
+
+    def ai_list_providers(self, owner_user_id: Optional[int]) -> dict[str, sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT * FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0)",
+            (owner_user_id,),
+        ).fetchall()
+        return {r["service_id"]: r for r in rows}
+
+    def ai_upsert_key(self, owner_user_id: Optional[int], service_id: str,
+                       api_key_encrypted: str, status: str, status_detail: str = "") -> None:
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            existing = self._conn.execute(
+                "SELECT id FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+                (owner_user_id, service_id),
+            ).fetchone()
+            if existing:
+                self._conn.execute(
+                    """UPDATE ai_providers SET api_key_encrypted=?, status=?, status_detail=?,
+                       last_checked_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                    (api_key_encrypted, status, status_detail, now, existing["id"]),
+                )
+            else:
+                self._conn.execute(
+                    """INSERT INTO ai_providers
+                       (owner_user_id, service_id, api_key_encrypted, status, status_detail, last_checked_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (owner_user_id, service_id, api_key_encrypted, status, status_detail, now),
+                )
+            self._conn.commit()
+
+    def ai_update_status(self, owner_user_id: Optional[int], service_id: str,
+                          status: str, status_detail: str = "") -> None:
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            self._conn.execute(
+                """UPDATE ai_providers SET status=?, status_detail=?, last_checked_at=?,
+                   updated_at=CURRENT_TIMESTAMP
+                   WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?""",
+                (status, status_detail, now, owner_user_id, service_id),
+            )
+            self._conn.commit()
+
+    def ai_delete_provider(self, owner_user_id: Optional[int], service_id: str) -> None:
+        with _lock:
+            self._conn.execute(
+                "DELETE FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+                (owner_user_id, service_id),
+            )
+            self._conn.commit()
+
+    def ai_record_usage(self, owner_user_id: Optional[int], service_id: str,
+                         success: bool, response_ms: int = 0) -> None:
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            self._conn.execute(
+                """UPDATE ai_providers SET
+                     total_requests = total_requests + 1,
+                     total_errors = total_errors + ?,
+                     total_response_ms = total_response_ms + ?,
+                     last_used_at = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                   WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?""",
+                (0 if success else 1, max(0, response_ms), now, owner_user_id, service_id),
+            )
+            self._conn.commit()
+
+    # ---- چندکلیدیِ AI (تا ۵ کلید به‌ازایِ هر (owner, service)) ----
+    MAX_AI_KEYS_PER_SERVICE = 5
+
+    def ai_list_keys(self, owner_user_id: Optional[int], service_id: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """SELECT * FROM ai_provider_keys
+               WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?
+               ORDER BY slot""",
+            (owner_user_id, service_id),
+        ).fetchall()
+
+    def ai_get_key(self, owner_user_id: Optional[int], service_id: str, slot: int) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            """SELECT * FROM ai_provider_keys
+               WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=? AND slot=?""",
+            (owner_user_id, service_id, slot),
+        ).fetchone()
+
+    def ai_add_key(self, owner_user_id: Optional[int], service_id: str,
+                    api_key_encrypted: str, status: str, status_detail: str = "") -> Optional[int]:
+        """اولین slotِ خالیِ ۱ تا ۵ رو برایِ این کلیدِ جدید پیدا می‌کنه و ثبتش
+        می‌کنه. اگه هر ۵ slot پر باشه None برمی‌گردونه (لایه‌ی بالاتر باید قبل
+        از فراخوانی چک کنه و پیام مناسب بده)."""
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            used = {
+                r["slot"] for r in self._conn.execute(
+                    "SELECT slot FROM ai_provider_keys WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+                    (owner_user_id, service_id),
+                ).fetchall()
+            }
+            slot = next((s for s in range(1, self.MAX_AI_KEYS_PER_SERVICE + 1) if s not in used), None)
+            if slot is None:
+                return None
+            self._conn.execute(
+                """INSERT INTO ai_provider_keys
+                   (owner_user_id, service_id, slot, api_key_encrypted, status, status_detail, last_checked_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (owner_user_id, service_id, slot, api_key_encrypted, status, status_detail, now),
+            )
+            self._conn.commit()
+            return slot
+
+    def ai_update_key_status(self, owner_user_id: Optional[int], service_id: str, slot: int,
+                              status: str, status_detail: str = "", cooldown_until: str = "") -> None:
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            self._conn.execute(
+                """UPDATE ai_provider_keys SET status=?, status_detail=?, last_checked_at=?,
+                   cooldown_until=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=? AND slot=?""",
+                (status, status_detail, now, cooldown_until, owner_user_id, service_id, slot),
+            )
+            self._conn.commit()
+
+    def ai_delete_key(self, owner_user_id: Optional[int], service_id: str, slot: int) -> None:
+        with _lock:
+            self._conn.execute(
+                """DELETE FROM ai_provider_keys
+                   WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=? AND slot=?""",
+                (owner_user_id, service_id, slot),
+            )
+            self._conn.commit()
+
+    def ai_record_key_usage(self, owner_user_id: Optional[int], service_id: str, slot: int,
+                             success: bool, response_ms: int = 0) -> None:
+        from .jdatetime_utils import now_jalali, format_jalali_datetime
+        now = format_jalali_datetime(now_jalali())
+        with _lock:
+            self._conn.execute(
+                """UPDATE ai_provider_keys SET
+                     total_requests = total_requests + 1,
+                     total_errors = total_errors + ?,
+                     total_response_ms = total_response_ms + ?,
+                     last_used_at = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                   WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=? AND slot=?""",
+                (0 if success else 1, max(0, response_ms), now, owner_user_id, service_id, slot),
+            )
+            self._conn.commit()
+
+    def ai_get_rotation_cursor(self, owner_user_id: Optional[int], service_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT rotation_cursor FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+            (owner_user_id, service_id),
+        ).fetchone()
+        return int(row["rotation_cursor"]) if row and row["rotation_cursor"] is not None else 0
+
+    def ai_set_rotation_cursor(self, owner_user_id: Optional[int], service_id: str, cursor: int) -> None:
+        """cursor رو روی ردیفِ aggregate این سرویس (ai_providers) ذخیره می‌کنه؛
+        اگه ردیف هنوز وجود نداشته باشه (کاربر هنوز از aiapi:svc بازدید نکرده)
+        یکی با وضعیتِ not_set می‌سازه تا cursor گم نشه."""
+        with _lock:
+            existing = self._conn.execute(
+                "SELECT id FROM ai_providers WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND service_id=?",
+                (owner_user_id, service_id),
+            ).fetchone()
+            if existing:
+                self._conn.execute(
+                    "UPDATE ai_providers SET rotation_cursor=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (cursor, existing["id"]),
+                )
+            else:
+                self._conn.execute(
+                    """INSERT INTO ai_providers (owner_user_id, service_id, status, rotation_cursor)
+                       VALUES (?, ?, 'not_set', ?)""",
+                    (owner_user_id, service_id, cursor),
+                )
+            self._conn.commit()
+
+    def ai_get_task_route(self, owner_user_id: Optional[int], task_id: str) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM ai_task_routes WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND task_id=?",
+            (owner_user_id, task_id),
+        ).fetchone()
+
+    def ai_list_task_routes(self, owner_user_id: Optional[int]) -> dict[str, sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT * FROM ai_task_routes WHERE COALESCE(owner_user_id,0)=COALESCE(?,0)",
+            (owner_user_id,),
+        ).fetchall()
+        return {r["task_id"]: r for r in rows}
+
+    def ai_set_task_route(self, owner_user_id: Optional[int], task_id: str,
+                           provider_service_id: str = "", fallback_service_id: str = "") -> None:
+        with _lock:
+            existing = self._conn.execute(
+                "SELECT rowid FROM ai_task_routes WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND task_id=?",
+                (owner_user_id, task_id),
+            ).fetchone()
+            if existing:
+                self._conn.execute(
+                    """UPDATE ai_task_routes SET provider_service_id=?, fallback_service_id=?,
+                       updated_at=CURRENT_TIMESTAMP
+                       WHERE COALESCE(owner_user_id,0)=COALESCE(?,0) AND task_id=?""",
+                    (provider_service_id, fallback_service_id, owner_user_id, task_id),
+                )
+            else:
+                self._conn.execute(
+                    """INSERT INTO ai_task_routes (owner_user_id, task_id, provider_service_id, fallback_service_id)
+                       VALUES (?, ?, ?, ?)""",
+                    (owner_user_id, task_id, provider_service_id, fallback_service_id),
+                )
+            self._conn.commit()
 
 
 db = Database()

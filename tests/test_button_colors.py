@@ -27,10 +27,20 @@ def check(name, cond, extra=""):
 for cb in ["menu:main"]:
     got = bc.style_for_callback(cb)
     check(f"button_colors.menu_main_primary[{cb}]", got == "primary", f"got={got!r}")
+# وقتی متنِ دکمه هم داده شود، BACK_NAV_TEXT_COLORS (که جلوترِ از رنگِ ثابتِ
+# callback چک می‌شود) حرفِ آخر را می‌زند: «بازگشت به منو»/«بازگشت به منوی اصلی»
+# هر دو سبزند، و «بازگشت به لیست»/«بازگشت به کانال» آبی — این جفت‌بندیِ عمدیِ
+# سیاستِ رنگ است، نه استثنا.
 got = bc.style_for_callback("menu:main", "🔙 بازگشت به منو")
-check("button_colors.menu_main_primary_with_text", got == "primary", f"got={got!r}")
-got = bc.style_for_callback("menu:main", "🏠 بازگشت به منویِ اصلی")
-check("button_colors.menu_main_primary_home_text", got == "primary", f"got={got!r}")
+check("button_colors.back_to_menu_text_success", got == "success", f"got={got!r}")
+got = bc.style_for_callback("menu:main", "🏠 بازگشت به منوی اصلی")
+check("button_colors.back_to_home_text_success", got == "success", f"got={got!r}")
+# متنی که در BACK_NAV_TEXT_COLORS نیست، رنگِ ثابتِ خودِ callback را می‌گیرد.
+got = bc.style_for_callback("menu:main", "🏠 منوی اصلی")
+check("button_colors.menu_main_primary_other_text", got == "primary", f"got={got!r}")
+for text, want in [("🔙 بازگشت به لیست", "primary"), ("🔙 بازگشت به کانال", "primary")]:
+    got = bc.style_for_callback("menu:sources", text)
+    check(f"button_colors.back_nav_text[{text}]", got == want, f"want={want} got={got!r}")
 
 # ۲) بقیه‌ی دکمه‌های «بازگشت»/«انصراف» (غیر از menu:main) باید بی‌رنگ بمونن —
 # این‌ها هیچ‌وقت به‌عنوانِ رنگِ ثابت تعریف نشدن و متن‌شون هم ✅/🔴/🟢 نداره.
@@ -87,13 +97,19 @@ for text in ["📦 فیلترِ فایل/اپ (APK و...): 🟢 فعال", "📦
 
 # ۶) مجموعه‌ای از اکشن‌های یک‌طرفه/ناوبری با رنگِ ثابتِ موردانتظار.
 EXPECTED = {
-    "res:stats": "primary", "res:logs": "primary",
+    "res:stats": "primary",
     "logs:all": "primary", "logs:errors": "primary", "logs:success": "primary",
     "logs:by_channel": "primary", "logs:by_destination": "primary", "logs:by_user": "primary",
     "src:destmap:5": "primary", "src:mode_menu:5": "primary", "usr:perms:9": "primary",
     "backup:restore": "primary", "dst:cfg:5": "primary",
-    "src:add": "success", "dst:add": "success", "usr:add": "success",
-    "adf:phrases_add": "success", "backup:now": "success",
+    # ➕ افزودنِ کانال مبدأ/مقصد عمداً آبیه (اکشنِ اصلیِ اون صفحه)، نه سبز —
+    # سبز برای «ایجاد/تاییدِ نهایی/ویرایشِ فهرست» نگه داشته شده.
+    "src:add": "primary", "dst:add": "primary",
+    "usr:add": "success",
+    "adf:phrases_add": "success",
+    # ⚠️ «ایجاد بکاپ فوری» و «مشاهده لاگ‌ها» عمداً قرمزن (عملیاتِ سنگین/حساسِ
+    # سرور)، نه سبز/آبی.
+    "backup:now": "danger", "res:logs": "danger",
     "adf:keywords": "success", "adf:file_ext": "success",
     "src:remove:1": "danger", "dst:remove:1": "danger",
     "extsrc:remove:1": "danger", "usr:remove:1": "danger",
@@ -132,9 +148,21 @@ finally:
     bc.MENU_BUTTON_COLORS.clear()
     bc.MENU_BUTTON_COLORS.update(_orig)
 
-# ۱۰) فراخوانیِ قدیمی بدونِ آرگومانِ text نباید کرش کنه (سازگاریِ عقب‌رو).
+# ۱۰) فراخوانیِ قدیمی بدونِ آرگومانِ text نباید کرش کنه (سازگاریِ عقب‌رو) و باید
+# همون رنگِ ثابتِ callback رو بده.
 got = bc.style_for_callback("src:add")
-check("button_colors.backward_compatible_no_text", got == "success", f"got={got!r}")
+check("button_colors.backward_compatible_no_text", got == "primary", f"got={got!r}")
+
+# ۱۱) هر مقداری که توی MENU_BUTTON_COLORS/FORCED_PREFIX_COLORS/BACK_NAV_TEXT_COLORS
+# نوشته شده باید یکی از رنگ‌های معتبر باشه؛ یک تایپو (مثلاً "sucess") بی‌سروصدا
+# به «بی‌رنگ» تبدیل می‌شه و کسی متوجه نمی‌شه.
+for name, table in (
+    ("MENU_BUTTON_COLORS", bc.MENU_BUTTON_COLORS),
+    ("FORCED_PREFIX_COLORS", bc.FORCED_PREFIX_COLORS),
+    ("BACK_NAV_TEXT_COLORS", bc.BACK_NAV_TEXT_COLORS),
+):
+    bad = {k: v for k, v in table.items() if v not in bc.VALID_COLORS}
+    check(f"button_colors.config_values_valid[{name}]", not bad, f"نامعتبر: {bad}")
 
 print("\n=== BUTTON_COLORS:", "ALL PASS" if not fails else f"{len(fails)} FAIL: {fails}")
 if fails:
