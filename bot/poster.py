@@ -170,7 +170,6 @@ async def _send_with_retry(send_coro_factory, attempts: int = 3, base_delay: flo
     «دائمی» (مثلاً حجمِ فایل بیشتر از سقفِ مجازِ تلگرام) بلافاصله (بدونِ تلفِ‌وقت
     برای تلاشِ بی‌فایده) بالا پرتاب می‌شن.
     """
-    last_exc: Exception | None = None
     flood_retries = 0
     attempt = 0
     while True:
@@ -188,7 +187,6 @@ async def _send_with_retry(send_coro_factory, attempts: int = 3, base_delay: flo
             # الان دقیقاً همون مدتی که تلگرام خواسته (+۱ ثانیه حاشیه‌ی اطمینان)
             # صبر می‌کنیم و این تلاش جزوِ سقفِ attempts حساب نمی‌شه، چون این
             # اصلاً «شکست» نیست - فقط باید صبر کرد.
-            last_exc = e
             flood_retries += 1
             if flood_retries > 5:
                 raise
@@ -200,7 +198,6 @@ async def _send_with_retry(send_coro_factory, attempts: int = 3, base_delay: flo
             await asyncio.sleep(e.retry_after + 1)
         except TelegramError as e:
             attempt += 1
-            last_exc = e
             reason_l = str(e).lower()
             if any(m in reason_l for m in _PERMANENT_ERROR_MARKERS):
                 raise

@@ -78,7 +78,7 @@ async def run_heavy(func: Callable, *args, **kwargs) -> Any:
 
             return result
 
-        except Exception as e:
+        except Exception:
             _total_errors += 1
             raise
 

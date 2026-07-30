@@ -23,7 +23,6 @@ from telegram.ext import ContextTypes
 from .. import ai_catalog as cat
 from .. import ai_crypto as crypto
 from .. import ai_provider_manager as mgr
-from ..database import db
 from .common import has_perm, is_admin, safe_edit, scope_owner
 
 log = logging.getLogger("repost_bot.ai_providers_menu")

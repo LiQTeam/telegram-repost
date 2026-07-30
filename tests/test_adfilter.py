@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import _harness
+import _harness  # noqa: F401 - بسته‌ی سبکِ bot را می‌سازد (اثرِ جانبی)
 from bot import ad_filter as adf
 
 fails = []

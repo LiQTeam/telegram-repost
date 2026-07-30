@@ -21,6 +21,7 @@ MODULES = [
     "test_button_colors.py",
     "test_v240_modules.py",
     "test_database.py",
+    "test_dedup_cache_backup.py",
     "test_menu_smoke.py",
 ]
 

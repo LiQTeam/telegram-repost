@@ -8,7 +8,7 @@ get_ad_feedback_posts) - مهم‌ترین چیزی که این‌جا باید 
 از یک Database(":memory:") جدا (نه singletonِ اصلی) استفاده می‌کنیم تا این
 تست هیچ فایلِ واقعی‌ای رو دست نزنه و کاملاً مستقل باشه.
 """
-import _harness
+import _harness  # noqa: F401 - بسته‌ی سبکِ bot را می‌سازد (اثرِ جانبی)
 from bot.database import Database
 
 fails = []

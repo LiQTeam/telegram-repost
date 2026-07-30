@@ -10,7 +10,6 @@ from telegram.ext import ContextTypes
 
 from .. import keyboards as kb
 from ..ad_filter import (
-    analyze as ad_analyze,
     classify_async as ad_classify_async,
     parse_keywords as ad_parse_keywords,
     parse_extensions as ad_parse_extensions,

@@ -294,7 +294,7 @@ def _dest_footer_text(d) -> str:
     url = db.dest_setting_get(did, "footer_channel_url", "")
     custom = db.dest_setting_get(did, "footer_custom_text", "")
     lines = [
-        f"✍️ <b>امضای اختصاصیِ این مقصد</b>",
+        "✍️ <b>امضای اختصاصیِ این مقصد</b>",
         f"🎯 {_esc(d['title'] or d['chat_id'])}",
         DIVIDER,
         f"وضعیت: {'🟢 روشن' if override_on else '🔴 خاموش'}",

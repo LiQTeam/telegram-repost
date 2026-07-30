@@ -1001,7 +1001,8 @@ async def classify_async(
     # به‌جای اینکه فوراً حرفِ یکی رو قبول کنیم، یک داورِ دومِ *مستقل و از یک
     # موتورِ متفاوت* هم می‌پرسیم.
     agreed_low_confidence = (verdict == is_ad) and low_conf
-    first_provider = "mistral"
+    # داورِ اول از مسیریابیِ خودکار (که برایِ این وظیفه Mistral رو اولویت می‌ده)
+    # اومد؛ داورِ دوم عمداً یک موتورِ *متفاوت* (Groq) است تا نظرش مستقل باشه.
     second_provider = "groq"
     verdict2, check_line2, _low_conf2 = await llm_classify(text, hint_keywords=None, provider=second_provider)
     detail["llm2"] = "AD" if verdict2 else ("SAFE" if verdict2 is False else "N/A")

@@ -13,7 +13,7 @@
 اگه بعداً کسی MENU_BUTTON_COLORS یا منطقِ رنگِ خودکار رو تغییر داد و یکی از
 این تضمین‌ها رو شکست، این تست باید FAIL بشه تا موقعِ ریویو دیده بشه.
 """
-import _harness
+import _harness  # noqa: F401 - بسته‌ی سبکِ bot را می‌سازد (اثرِ جانبی، نه استفاده‌ی مستقیم)
 from bot import button_config as bc
 
 fails = []
