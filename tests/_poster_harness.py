@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Load bot.poster with heavy/DB deps stubbed, so send_post logic is testable."""
-import _harness  # sets up lightweight 'bot' package
-import sys, types, asyncio
+import _harness  # noqa: F401 - بسته‌ی سبکِ bot را می‌سازد (اثرِ جانبی)
+import sys, types
 
 def _mod(name):
     m = types.ModuleType(name)
@@ -69,6 +69,9 @@ fake_db = FakeDB()
 dbmod = _mod("bot.database")
 dbmod.db = fake_db
 
-# Now import poster (real formatter/scraper/utils/ad_filter/cache/concurrency/config)
-from bot import poster
-from bot.scraper import Post, MediaItem
+# Now import poster (real formatter/scraper/utils/ad_filter/cache/concurrency/config).
+# این‌ها عمداً اینجا وارد می‌شن تا فایل‌های تست بعد از importِ همین ماژول،
+# `from bot import poster` و `from bot.scraper import Post, MediaItem` رو روی
+# نسخه‌ی استاب‌شده بگیرن (اثرِ جانبیِ گرم‌کردنِ sys.modules، نه استفاده‌ی مستقیم).
+from bot import poster  # noqa: F401
+from bot.scraper import Post, MediaItem  # noqa: F401

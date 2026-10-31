@@ -149,6 +149,12 @@ activemq-data/
 
 # Environments
 .env
+# ⚠️ backup_manager موقعِ بازیابیِ بکاپ، قبل از نوشتن روی .env یک کپیِ کاملِ آن
+# را کنارش با نامِ .env.bak_<timestamp> می‌گذارد. آن کپی هم دقیقاً همان
+# توکنِ ربات و کلیدهای API را دارد، پس باید مثلِ خودِ .env نادیده گرفته شود
+# (وگرنه با یک `git add -A` ساده منتشر می‌شود).
+.env.*
+!.env.example
 .envrc
 .venv
 env/

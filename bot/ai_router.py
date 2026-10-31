@@ -19,7 +19,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # مدل‌ها
 MISTRAL_MODEL = "mistral-small-latest"
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 # زمان تایم‌اوت (ثانیه)
 TIMEOUT = 30
@@ -46,12 +46,75 @@ _EMOJI_RULES = (
 )
 
 
+_MODULE_TASK_MAP = {
+    "translate": "translate",
+    "rewrite": "rewrite",
+    "summarize": "summarize",
+    "ad_classify": "analyze_text",
+    "general": "generate_caption",
+    "fix_text": "fix_text",
+    "generate_hashtags": "generate_hashtags",
+    "prompt_writer": "prompt_writer",
+    # وظایفِ تعامليِ صفحه‌ی اصلی که مستقیماً با نامِ خودشون route می‌شن؛ این‌جا مپ
+    # می‌شن تا اگر کاربر Providerِ سفارشی برای همین وظیفه تنظیم کرده باشه، اعمال بشه.
+    "generate_caption": "generate_caption",
+    "generate_title": "generate_title",
+    "auto_reply": "auto_reply",
+    "analyze_text": "analyze_text",
+}
+
+# زبان‌هایِ قابل‌انتخاب برایِ ترجمه‌ی هوشمند (کد -> نامِ نمایشی)
+TRANSLATE_LANGS: dict[str, str] = {
+    "fa": "فارسی",
+    "en": "انگلیسی",
+    "ar": "عربی",
+    "auto": "خودکار (برعکسِ زبانِ متن)",
+}
+
+# سطح‌هایِ خلاصه‌سازی (کد -> (برچسبِ نمایشی، نسبتِ تقریبیِ طول خروجی، توضیحِ اضافه برایِ پرامپت))
+SUMMARY_LEVELS: dict[str, tuple[str, str, str]] = {
+    "short": (
+        "⚡️ فوق‌کوتاه",
+        "۱۰ تا ۱۵ درصد",
+        "فقط در حدِ یک یا دو جمله‌ی تیتروار، فقط مهم‌ترین نکته را بگو؛ مثلِ تیترِ خبری.",
+    ),
+    "medium": (
+        "📄 متوسط",
+        "۲۰ تا ۳۰ درصد",
+        "خلاصه‌ای استاندارد و متعادل که نکاتِ کلیدی را در چند جمله‌ی روان پوشش می‌دهد.",
+    ),
+    "detailed": (
+        "📚 مفصل",
+        "۴۰ تا ۵۰ درصد",
+        "خلاصه‌ای کامل‌تر و ساختاریافته؛ در صورتِ نیاز از نکته‌های بولت‌وار (هرکدام با یک ایموجیِ مرتبط در ابتدا) "
+        "برایِ جدا کردنِ محورهایِ اصلی استفاده کن، ولی باز هم چیزی جز خلاصه ننویس.",
+    ),
+}
+
+
 class AIRouter:
     """مسیریاب هوشمند برای انتخاب بهترین مدل AI"""
 
-    def __init__(self):
+    def __init__(self, owner_user_id: "int | None" = None):
+        # owner_user_id: اگه ست بشه، قبل از منطقِ پیش‌فرضِ Mistral/Groq (که از
+        # کلیدهای .env استفاده می‌کنه)، اول بررسی می‌شه که آیا این کاربر/ادمین
+        # برایِ این وظیفه یک Providerِ سفارشی (از سیستمِ مدیریتِ API هوش
+        # مصنوعی) و فعال تنظیم کرده یا نه. اگه نه، دقیقاً رفتارِ قبلی ادامه
+        # پیدا می‌کنه (سازگاریِ کامل با معماریِ موجود).
+        self.owner_user_id = owner_user_id
         self.session = httpx.AsyncClient(timeout=TIMEOUT)
         self._last_error = None
+
+    async def _try_custom(self, task_type: str, text: str, system_prompt: str, temperature: float) -> Optional[str]:
+        mapped = _MODULE_TASK_MAP.get(task_type)
+        if not mapped:
+            return None
+        try:
+            from .ai_provider_manager import try_custom_text
+            return await try_custom_text(self.owner_user_id, mapped, text, system_prompt, temperature)
+        except Exception as e:
+            log.warning("بررسیِ Providerِ سفارشی برایِ وظیفه‌ی %s شکست خورد: %s", task_type, e)
+            return None
 
     async def _call_mistral(self, prompt: str, system_prompt: str = "", temperature: float = 0.7) -> Optional[str]:
         """
@@ -67,6 +130,15 @@ class AIRouter:
         """
         فراخوانی Mistral API با تاریخچه‌ی کامل پیام‌ها (برای چت چندمرحله‌ای)
         """
+        # ⚠️ فیکس: بدونِ این گارد، وقتی کلید تنظیم نشده باشه هدرِ
+        # «Authorization: Bearer » ساخته می‌شد و httpx همون‌جا (قبل از هر
+        # درخواستِ شبکه‌ای) با `Illegal header value` استثنا می‌داد؛ نتیجه یک
+        # لاگِ گمراه‌کننده‌ی «خطا در فراخوانی Mistral» بود که مثلِ خرابیِ سرویس
+        # به‌نظر می‌رسید، در حالی‌که فقط کلید ست نشده بود.
+        if not MISTRAL_API_KEY:
+            log.debug("کلیدِ Mistral تنظیم نشده؛ این Provider رد شد.")
+            self._last_error = "Mistral: کلید تنظیم نشده"
+            return None
         try:
             response = await self.session.post(
                 MISTRAL_URL,
@@ -124,6 +196,11 @@ class AIRouter:
         """
         فراخوانی Groq API با تاریخچه‌ی کامل پیام‌ها (برای چت چندمرحله‌ای)
         """
+        # همون گاردِ _call_mistral_messages — نگاه کن به توضیحش.
+        if not GROQ_API_KEY:
+            log.debug("کلیدِ Groq تنظیم نشده؛ این Provider رد شد.")
+            self._last_error = "Groq: کلید تنظیم نشده"
+            return None
         try:
             response = await self.session.post(
                 GROQ_URL,
@@ -184,6 +261,10 @@ class AIRouter:
         - ترجمه و بازنویسی خلاقانه: Mistral ترجیح داده می‌شود
         - اصلاح نگارشی یا ترجمه ساده: Groq ترجیح داده می‌شود
         """
+        custom_result = await self._try_custom(task_type, text, system_prompt, temperature)
+        if custom_result is not None:
+            return custom_result
+
         text_len = len(text)
 
         # انتخاب اولیه بر اساس نوع و طول
@@ -253,20 +334,118 @@ class AIRouter:
         )
         return await self.route(text, task_type="translate", system_prompt=system, temperature=0.5)
 
-    async def summarize(self, text: str) -> str:
+    async def summarize(self, text: str, level: str = "medium") -> str:
         """
-        خلاصه‌سازی هوشمند متن با حفظ نکات کلیدی
+        خلاصه‌سازی هوشمند و چندسطحیِ متن با حفظ نکات کلیدی.
+        level: یکی از "short" / "medium" / "detailed" (نگاه کن به SUMMARY_LEVELS)
         """
+        _label, ratio, extra_rule = SUMMARY_LEVELS.get(level, SUMMARY_LEVELS["medium"])
         system = (
             "تو یک خلاصه‌ساز حرفه‌ای و دقیق هستی. "
             "متن ورودی را به‌صورت مختصر، مفید و روان خلاصه کن. "
             "نکات کلیدی و اصلی را به‌طور کامل حفظ کن. "
             "خلاصه باید خوانا، منسجم و بدون جملات اضافی باشد. "
-            "طول خلاصه باید حدود ۲۰ تا ۳۰ درصد متن اصلی باشد.\n\n"
+            f"طول خلاصه باید حدود {ratio} متن اصلی باشد. {extra_rule}\n\n"
             + _EMOJI_RULES
-            + "\n\nتنها متن خلاصه‌شده را برگردان، بدون توضیح اضافی."
+            + "\n\nتنها متن خلاصه‌شده را برگردان، بدون توضیح اضافی، بدون گفتنِ این‌که چه سطحی انتخاب شده."
         )
         return await self.route(text, task_type="summarize", system_prompt=system, temperature=0.5)
+
+    async def translate_smart(self, text: str, target: str = "fa") -> str:
+        """
+        ترجمه‌ی هوشمند با تشخیصِ خودکارِ زبانِ مبدأ.
+        target: "fa" | "en" | "ar" | "auto" (auto یعنی برعکسِ زبانِ تشخیص‌داده‌شده:
+        اگر متن فارسی بود -> انگلیسی، در غیرِ این صورت -> فارسی)
+        خروجی همیشه با یک خطِ اول به‌شکلِ دقیقاً:
+            LANG: <نامِ زبانِ تشخیص‌داده‌شده به فارسی>
+        و از خطِ دوم به بعد، فقط متنِ ترجمه‌شده است — تا لایه‌ی نمایش بتونه این دو رو جدا کنه.
+        """
+        target_name = TRANSLATE_LANGS.get(target, "فارسی")
+        if target == "auto":
+            target_rule = (
+                "ابتدا زبانِ متنِ ورودی رو خودکار تشخیص بده. اگر زبانِ متن فارسی بود، آن را به انگلیسیِ روان "
+                "ترجمه کن؛ در غیرِ این صورت (هر زبانِ دیگری) آن را به فارسیِ روان ترجمه کن."
+            )
+        else:
+            target_rule = f"ابتدا زبانِ متنِ ورودی رو خودکار تشخیص بده، سپس آن را به {target_name} ترجمه کن."
+        system = (
+            "تو یک مترجمِ حرفه‌ای، چندزبانه و فوق‌العاده ماهر هستی که همیشه اول زبانِ متنِ ورودی رو دقیق تشخیص "
+            "می‌دهی و بعد ترجمه می‌کنی.\n"
+            + target_rule + "\n"
+            "ترجمه باید روان، طبیعی، با رعایتِ کاملِ دستورِ زبان و نگارشِ زبانِ مقصد باشد؛ هرگز خشک و "
+            "تحت‌اللفظی ترجمه نکن. لحنِ متنِ اصلی (رسمی، خبری، طنز، تبلیغاتی) را در ترجمه هم حفظ کن.\n\n"
+            "فرمتِ خروجی حیاتی است و باید دقیقاً همین ساختار را رعایت کنی:\n"
+            "خطِ اول -> دقیقاً به‌شکلِ: LANG: <نامِ زبانِ تشخیص‌داده‌شده، به فارسی، مثلِ «انگلیسی» یا «عربی» یا «فارسی»>\n"
+            "خطِ دوم -> خالی\n"
+            "از خطِ سوم به بعد -> فقط و فقط متنِ ترجمه‌شده، بدون هیچ توضیحِ اضافه‌ای."
+        )
+        return await self.route(text, task_type="translate", system_prompt=system, temperature=0.4)
+
+    async def fix_text(self, text: str) -> str:
+        """
+        فقط اصلاحِ املا، گرامر، نقطه‌گذاری و نیم‌فاصله — بدونِ بازنویسیِ خلاقانه.
+        سبک، لحن، طولِ جمله‌ها و انتخابِ کلماتِ نویسنده دست‌نخورده می‌مونه.
+        """
+        system = (
+            "تو یک ویراستارِ حرفه‌ایِ فارسی هستی که فقط و فقط غلط‌های نگارشی رو اصلاح می‌کنی؛ "
+            "تو ویراستارِ ادبی یا بازنویس‌کننده نیستی.\n\n"
+            "قوانینِ دقیق:\n"
+            "۱. فقط این موارد رو اصلاح کن: غلط‌های املایی، غلط‌های دستورِ زبان (فعل/فاعل، مطابقتِ جمع/مفرد)، "
+            "نقطه‌گذاری (نقطه، ویرگول، علامتِ سؤال/تعجب)، نیم‌فاصله‌های غلط یا جاافتاده، فاصله‌های اضافیِ بینِ کلمات.\n"
+            "۲. کلمات، لحن، سبکِ نویسنده، طولِ جمله‌ها و ترتیبِ اطلاعات رو عیناً حفظ کن؛ هیچ جمله‌ای رو "
+            "بازنویسی، خلاصه یا زیباتر نکن — این کارِ ابزارِ «بازنویسی» است نه این ابزار.\n"
+            "۳. ایموجی‌های موجود در متن رو دقیقاً همون‌جوری که هستن نگه‌دار؛ ایموجیِ جدید اضافه نکن و حذفشون نکن.\n"
+            "۴. اگر متن از قبل کاملاً درست بود، همون متن رو بدونِ هیچ تغییری برگردون.\n\n"
+            "تنها متنِ اصلاح‌شده رو برگردون، بدونِ توضیح، بدونِ فهرستِ غلط‌های پیداشده، بدونِ مقدمه."
+        )
+        return await self.route(text, task_type="fix_text", system_prompt=system, temperature=0.2)
+
+    async def generate_hashtags(self, text: str, count: int = 8) -> str:
+        """
+        تولیدِ هوشمندِ هشتگ‌هایِ مرتبط با متن (ترکیبِ فارسی/انگلیسی بر حسبِ مناسب‌بودن).
+        """
+        system = (
+            "تو یک متخصصِ سئو و رشدِ محتوایِ شبکه‌هایِ اجتماعی (به‌خصوص تلگرام و اینستاگرام) هستی. "
+            f"بر اساسِ موضوع، کلیدواژه‌ها و حال‌وهوایِ متنِ ورودی، دقیقاً {count} هشتگِ مرتبط، پرکاربرد و "
+            "هوشمندانه تولید کن.\n\n"
+            "قوانین:\n"
+            "۱. ترکیبی از هشتگ‌هایِ فارسی و انگلیسی بساز؛ فقط وقتی از انگلیسی استفاده کن که آن هشتگِ "
+            "خاص در انگلیسی رایج‌تر و پرجست‌وجوتر باشه (مثلِ نامِ برند/تکنولوژی/فیلم).\n"
+            "۲. از هشتگ‌هایِ خیلی کلی و بی‌فایده (مثلِ #پست یا #عکس) خودداری کن؛ هشتگ‌ها باید دقیقاً به "
+            "موضوعِ همین متن مربوط باشن، نه فقط کلیِ حوزه.\n"
+            "۳. هیچ فاصله یا نویسه‌ی غیرمجاز (مثلِ نیم‌فاصله یا -) داخلِ خودِ هشتگ نذار؛ کلماتِ چندبخشی رو "
+            "بدونِ فاصله بچسبون (مثلِ #هوش_مصنوعی یا #هوش‌مصنوعی با آندرلاین یا بدونِ فاصله بنویس).\n"
+            "۴. فقط لیستِ هشتگ‌ها رو، همه در یک خط و با یک فاصله از هم جدا، برگردون؛ هیچ توضیح، شماره یا "
+            "متنِ اضافه‌ای ننویس."
+        )
+        return await self.route(text, task_type="generate_hashtags", system_prompt=system, temperature=0.6)
+
+    async def prompt_writer(self, idea: str) -> str:
+        """
+        تبدیلِ یک ایده‌ی کوتاهِ فارسی به یک پرامپتِ فوق‌حرفه‌ایِ انگلیسی برایِ تولیدِ تصویر با هوش مصنوعی،
+        با رعایتِ کاملِ اصولِ Prompt Engineering (Subject / Style / Lighting / Composition / Mood / Details / Negative).
+        خروجی عمداً کاملاً انگلیسی است چون مدل‌هایِ تولیدِ تصویر با پرامپتِ انگلیسی نتیجه‌یِ به‌مراتب بهتری می‌دهند.
+        """
+        system = (
+            "You are a world-class AI image-generation prompt engineer. Given a short idea (possibly in Persian), "
+            "write ONE professional, highly-detailed English prompt following best prompt-engineering practice.\n\n"
+            "Structure your output as labeled lines, in this exact order, each on its own line:\n"
+            "Subject: <the main subject, described precisely and vividly>\n"
+            "Style: <art/photo style, e.g. cinematic photography, oil painting, 3D render, anime, cyberpunk...>\n"
+            "Lighting: <lighting setup, e.g. golden hour, studio softbox, neon rim light...>\n"
+            "Composition: <camera angle, framing, lens, depth of field>\n"
+            "Color palette: <dominant colors / mood colors>\n"
+            "Mood: <the emotional atmosphere>\n"
+            "Details: <extra fine details that add realism/richness>\n"
+            "Quality tags: <e.g. 8k, ultra-detailed, sharp focus, award-winning, trending on artstation>\n"
+            "Negative prompt: <what to avoid, e.g. blurry, extra limbs, watermark, low quality, deformed>\n"
+            "Aspect ratio: <a sensible suggestion, e.g. 16:9 or 1:1 or 9:16, based on the subject>\n\n"
+            "Rules:\n"
+            "- Every value must be concrete and specific, never vague placeholders.\n"
+            "- Do not add any heading, explanation, or translation before or after the structured lines.\n"
+            "- Do not wrap the output in code fences yourself; return plain labeled lines only."
+        )
+        return await self.route(idea, task_type="prompt_writer", system_prompt=system, temperature=0.8)
 
     async def rewrite(self, text: str) -> str:
         """
@@ -303,6 +482,19 @@ class AIRouter:
             "پاسخ‌هایت طبیعی، مفید، مستقیم و بدون مقدمه‌چینیِ اضافه باشد؛ کوتاه و خلاصه بنویس مگر این‌که موضوع "
             "واقعاً نیاز به توضیح کامل‌تر داشته باشد."
         )
+        last_user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_text = m.get("content", "")
+                break
+        try:
+            from .ai_provider_manager import try_custom_text
+            custom_result = await try_custom_text(self.owner_user_id, "auto_reply", last_user_text, system_prompt)
+            if custom_result is not None:
+                return custom_result
+        except Exception as e:
+            log.warning("بررسیِ Providerِ سفارشی برایِ چت شکست خورد: %s", e)
+
         full_messages = [{"role": "system", "content": system_prompt}] + list(messages)
         text_len = sum(len(m.get("content", "")) for m in messages)
 

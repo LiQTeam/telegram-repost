@@ -11,7 +11,7 @@
 
 نمونه:
     python3 tests/rtl_probe.py -1001234567890
-    python3 tests/rtl_probe.py @mychannel 123456789:AAExampleTokenPlaceholder
+    python3 tests/rtl_probe.py @mychannel 123456789:AAF...
 
 CHAT_ID می‌تواند آیدیِ عددیِ کانال (مثلِ -100...) یا @username باشد.
 ربات باید در آن چت ادمین/عضو باشد.

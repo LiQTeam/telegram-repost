@@ -5,7 +5,105 @@
 """
 from __future__ import annotations
 
+import logging
 import os
+import signal
+import time
+
+# ⚠️ سقفِ زمانیِ *مطلقِ* واچ‌داگِ shutdown - باید واضحاً کمتر از TimeoutStopSecِ
+# یونیتِ systemd (۲۰ ثانیه، در install.sh) باشه. چرا لازمه با اینکه هم
+# validate_provider() (بالای ai_provider_manager.py، سقفِ ۱۲ ثانیه) و هم
+# ThreadPoolExecutorِ concurrency.py (پایین همین فایل، سقفِ ۱۰ ثانیه) خودشون
+# سقفِ زمانی دارن: این دو سقف روی مسیرِ shutdown پشتِ‌سرِ‌هم اجرا می‌شن (اول
+# PTB منتظرِ اتمامِ هندلرِ در‌حال‌اجرا می‌مونه [تا ۱۲ ثانیه]، بعد _post_shutdown
+# صدا زده می‌شه [تا ۱۰ ثانیه‌یِ دیگه]) - جمعشون (۱۲+۱۰=۲۲ ثانیه) از سقفِ
+# ۲۰ثانیه‌ایِ TimeoutStopSec رد می‌شه. این واچ‌داگ یک سقفِ مطلق و مستقل از کلِ
+# فرآیندِ shutdown - صرف‌نظر از این‌که چند زیرسیستم پشتِ سرِ هم گیر کنن یا حتی
+# یک hangِ کاملاً پیش‌بینی‌نشده‌یِ دیگه - تضمین می‌کنه.
+_WATCHDOG_GRACE_SECONDS = 16.0
+
+
+def _spawn_shutdown_watchdog() -> None:
+    """
+    یک پروسه‌ی بچه‌یِ مستقل (واچ‌داگ) فورک می‌کنه که هیچ کاری با منطقِ ربات
+    نداره؛ فقط منتظرِ SIGTERM/SIGINT می‌مونه و اگه پروسه‌ی اصلی (parent - همون
+    MainPIDِ که systemd می‌شناسه، چون fork خودِ parent's PID رو عوض نمی‌کنه)
+    ظرفِ _WATCHDOG_GRACE_SECONDS بعد از دریافتِ سیگنال خودش تمیز نمرده باشه،
+    مستقیماً با SIGKILL پروسه‌ی اصلی رو می‌کشه - قبل از این‌که systemd با
+    TimeoutStopSec (۲۰ ثانیه) این کار رو با روشِ خشن‌ترِ control-group انجام
+    بده (که «State 'stop-sigterm' timed out. Killing.» رو توی journalctl
+    می‌ندازه).
+
+    ⚠️ باید همین‌جا، در همون ابتدایِ فایل و قبل از هر importِ سنگین (`bot`،
+    `telegram`) و قبل از هر threadی فورک بشه. فورک بعد از بالا اومدنِ
+    threadها/event loop/سوکت‌ها stateِ ناقص کپی می‌کنه و می‌تونه قفل/کرش بده.
+
+    فیکسِ باگِ fd inheritance: fork تمامِ فایل‌دیسکریپتورهای بازِ parent
+    (stdin/stdout/stderr) رو عیناً کپی می‌کنه. اگه اینا رو تویِ بچه نبندیم،
+    واچ‌داگ pipeِ journald رو دستش نگه می‌داره؛ حتی بعد از مردنِ parent،
+    journald/systemd این pipe رو هنوز به یه پروسه‌ی دیگه (واچ‌داگ) متصل
+    می‌بینه که می‌تونه بستنِ تمیزِ لاگ/سرویس رو معوق نگه داره. واچ‌داگ اصلاً
+    کاری با stdin/stdout/stderr نداره، پس بلافاصله بعدِ fork همه رو می‌بندیم
+    و به /dev/null وصل می‌کنیم.
+    """
+    main_pid = os.getpid()
+    try:
+        pid = os.fork()
+    except OSError:
+        # فورک روی بعضی محیط‌های محدودشده (مثلاً کانتینرهای بدونِ اجازه‌ی
+        # فورک) ممکنه fail بشه؛ نبودِ واچ‌داگ نباید جلویِ بالا اومدنِ ربات رو
+        # بگیره - فقط این لایه‌یِ محافظتیِ اضافه از دست می‌ره.
+        logging.getLogger(__name__).warning(
+            "فورکِ واچ‌داگِ shutdown ناموفق بود - ربات بدونِ این لایه‌یِ محافظتی ادامه می‌ده."
+        )
+        return
+
+    if pid != 0:
+        # پروسه‌ی اصلی (parent) - همون ربات - بدونِ هیچ تغییری ادامه می‌ده.
+        return
+
+    # ⚠️ از این خط به بعد فقط توی پروسه‌ی بچه (واچ‌داگ) هستیم. این پروسه هرگز
+    # نباید به بقیه‌ی main.py برسه یا هیچ کدی از خودِ ربات رو اجرا کنه.
+    try:
+        devnull_fd = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull_fd, 0)
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        if devnull_fd > 2:
+            os.close(devnull_fd)
+    except OSError:
+        pass
+
+    state: dict[str, float | None] = {"deadline": None}
+
+    def _on_signal(signum, frame):  # noqa: ANN001, ARG001 - امضایِ اجباریِ signal.signal
+        if state["deadline"] is None:
+            state["deadline"] = time.monotonic() + _WATCHDOG_GRACE_SECONDS
+
+    try:
+        signal.signal(signal.SIGTERM, _on_signal)
+        signal.signal(signal.SIGINT, _on_signal)
+    except Exception:
+        pass
+
+    while True:
+        time.sleep(0.5)
+        try:
+            os.kill(main_pid, 0)
+        except (ProcessLookupError, PermissionError):
+            os._exit(0)  # پروسه‌ی اصلی مرده - کارِ واچ‌داگ تمومه
+
+        deadline = state["deadline"]
+        if deadline is not None and time.monotonic() >= deadline:
+            try:
+                os.kill(main_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os._exit(0)
+
+
+if __name__ == "__main__":
+    _spawn_shutdown_watchdog()
 
 # ⚠️ این بلوک باید همین‌جا، قبل از هر importِ دیگه (خصوصاً `from bot import
 # config`) بمونه. چرا: `bot/__init__.py` به‌محضِ importِ پکیجِ bot، ماژول‌های
@@ -30,6 +128,13 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 
 import sys
+
+# سقفِ زمانیِ امن برای منتظرِ تمام‌شدنِ کارهای سنگینِ در حالِ اجرا (واترمارک/
+# بهبودِ کیفیت با AI) موقعِ خاموش‌شدن - نگاه کن به توضیحِ کاملش توی
+# _post_shutdown. باید واضحاً کمتر از TimeoutStopSecِ یونیتِ systemd
+# (پیش‌فرض ۲۰ ثانیه، توی install.sh) باشه تا فرصتِ کافی برایِ خروجِ کنترل‌شده
+# قبل از این‌که خودِ systemd با SIGKILL پروسه رو بکشه باقی بمونه.
+_HEAVY_SHUTDOWN_GRACE_SECONDS = 10.0
 
 from telegram import BotCommand, MenuButtonCommands, Update
 from telegram.ext import Application, ContextTypes
@@ -155,12 +260,41 @@ async def _post_shutdown(application: Application) -> None:
     # می‌کرد و بعد مجبور می‌شد با SIGKILL به‌زور ببندتش.
     import asyncio
     import logging
+    import os
     log = logging.getLogger(__name__)
     try:
         from bot import concurrency as _concurrency
         log.info("در حالِ بستنِ ThreadPoolExecutorِ پردازش‌های سنگین...")
-        await asyncio.get_event_loop().run_in_executor(None, _concurrency.shutdown)
+        # ⚠️ فیکسِ جدید (روی همون باگ): _concurrency.shutdown() عمداً از
+        # wait=True استفاده می‌کنه تا تردهای idle برای همیشه نمونن - این
+        # درسته. ولی اگه دقیقاً لحظه‌ی systemctl stop یک پردازشِ سنگین
+        # (مثلاً بهبودِ کیفیتِ تصویر با torch روی CPU) واقعاً درحالِ اجرا
+        # باشه، از بیرون هیچ راهی برای لغوِ اون ترد نیست؛ wait=True تا
+        # وقتی اون کار *واقعاً* تموم بشه صبر می‌کنه - که می‌تونه از
+        # TimeoutStopSecِ یونیتِ systemd (۲۰ ثانیه) بیشتر طول بکشه و دقیقاً
+        # همون خطای «Failed with result 'timeout'» رو دوباره بده (systemd
+        # پروسه رو بی‌رحمانه SIGKILL می‌کنه، بدونِ این‌که کدِ ما بتونه
+        # جلوشو بگیره). راهِ حل: یک سقفِ زمانیِ امن (کمتر از TimeoutStopSec)
+        # روی این انتظار می‌ذاریم؛ اگه رد شد، به‌جایِ این‌که بذاریم دیر یا
+        # زود systemd با SIGKILL بکشتش، خودمون با os._exit یه خروجِ فوریِ
+        # کنترل‌شده انجام می‌دیم. کارِ سنگینِ نیمه‌کاره از دست می‌ره (پستِ
+        # بعدی دوباره امتحان می‌شه)، ولی سرویس سریع و تمیز (زیرِ سقفِ
+        # systemd) خاموش می‌شه و Restart=on-failure بلافاصله دوباره
+        # بالاش می‌آره - به‌جایِ ده‌ها ثانیه معطلی + SIGKILLِ زشتِ سراسری.
+        await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _concurrency.shutdown),
+            timeout=_HEAVY_SHUTDOWN_GRACE_SECONDS,
+        )
         log.info("ThreadPoolExecutor با موفقیت بسته شد.")
+    except asyncio.TimeoutError:
+        log.warning(
+            "بستنِ ThreadPoolExecutor بعد از %.0f ثانیه هنوز کامل نشده (احتمالاً یک "
+            "پردازشِ سنگین/AI در حالِ اجراست) - برای جلوگیریِ از SIGKILLِ سراسریِ "
+            "systemd، همین‌جا با خروجِ کنترل‌شده پروسه رو می‌بندیم؛ Restart=on-failure "
+            "طبقِ تنظیماتِ سرویس دوباره بالاش می‌آره.",
+            _HEAVY_SHUTDOWN_GRACE_SECONDS,
+        )
+        os._exit(0)
     except Exception:
         logging.getLogger(__name__).exception("بستنِ ThreadPoolExecutor ناموفق بود")
 

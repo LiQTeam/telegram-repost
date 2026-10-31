@@ -553,7 +553,6 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     awaiting = context.user_data.get("wmc_awaiting")
     if not awaiting:
         return False
-    uid = update.effective_user.id if update.effective_user else None
     text = (update.message.text or "").strip()
 
     if awaiting == "new_name":

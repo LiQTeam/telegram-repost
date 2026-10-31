@@ -130,6 +130,15 @@ async def _handle_post(request: web.Request) -> web.Response:
                         if size > _MAX_UPLOAD_BYTES:
                             fh.close()
                             fpath.unlink(missing_ok=True)
+                            # باگ: فایل‌هایی که *قبلِ* همین فایلِ حجیم، از همین درخواستِ
+                            # چندفایلی (آلبوم) با موفقیت ذخیره شده بودن (توی saved_paths)
+                            # اینجا پاک نمی‌شدن، چون این یک `return` مستقیمه، نه یک
+                            # exception - پس بلاکِ except (که پاک‌سازی رو انجام می‌ده)
+                            # اصلاً اجرا نمی‌شد. نتیجه: هر آپلودِ آلبومی که یکی از
+                            # فایل‌هاش (نه لزوماً اولی) از سقف رد بشه، بقیه‌ی فایل‌های
+                            # قبلیِ همون آلبوم برای همیشه روی دیسک می‌موندن (نشتِ دیسک).
+                            for _p in saved_paths:
+                                _p.unlink(missing_ok=True)
                             return web.json_response({"error": "file too large"}, status=413)
                         fh.write(chunk)
                 saved_paths.append(fpath)

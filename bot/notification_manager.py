@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from html import escape as _esc
 from typing import Optional
 
 from telegram import Bot
@@ -122,7 +123,7 @@ class NotificationManager:
         now = now_jalali()
 
         msg = (
-            f"❌ <b>خطا: {error_type}</b>\n"
+            f"❌ <b>خطا: {_esc(str(error_type))}</b>\n"
             f"🕒 {format_jalali_datetime(now)}\n"
             f"─────────────────\n"
         )
@@ -131,7 +132,7 @@ class NotificationManager:
         if user_id:
             user = db.get_user(user_id)
             if user:
-                msg += f"👤 کاربر: {user['name']} (ID: {user['telegram_id'] or 'نامشخص'})\n"
+                msg += f"👤 کاربر: {_esc(str(user['name']))} (ID: {user['telegram_id'] or 'نامشخص'})\n"
             else:
                 msg += f"👤 کاربر: {user_id}\n"
 
@@ -139,21 +140,27 @@ class NotificationManager:
         if channel_id:
             ch = db.get_channel(channel_id)
             if ch:
-                msg += f"📡 کانال مبدأ: @{ch['username']} (ID: {ch['id']})\n"
+                msg += f"📡 کانال مبدأ: @{_esc(str(ch['username']))} (ID: {ch['id']})\n"
 
         # اطلاعات کانال مقصد
         if destination_id:
             dest = db.get_destination(destination_id)
             if dest:
-                msg += f"🎯 کانال مقصد: {dest['title'] or dest['chat_id']} (ID: {dest['id']})\n"
+                msg += f"🎯 کانال مقصد: {_esc(str(dest['title'] or dest['chat_id']))} (ID: {dest['id']})\n"
 
         # اطلاعات پست
         if post_id:
             msg += f"📨 پست: {post_id}\n"
 
         # جزئیات اضافی
+        # نکته: مقادیرِ details معمولاً از متنِ خامِ خطا/استثنا میان (مثلاً پیامِ
+        # خطای تلگرام یا یک کتابخانه‌ی خارجی) که ممکنه کاراکترهای </>/& داشته
+        # باشه؛ چون این پیام با parse_mode=HTML فرستاده می‌شه، اگه escape نشه
+        # تلگرام با خطای «Can't parse entities» کلِ پیام (حتی خودِ اعلانِ خطا) رو
+        # رد می‌کنه - دقیقاً همون کلاس‌باگی که در ai_provider_manager.py و
+        # poster.py._notify_admins_of_failures قبلاً فیکس شده.
         for key, value in details.items():
-            msg += f"• {key}: {value}\n"
+            msg += f"• {_esc(str(key))}: {_esc(str(value))}\n"
 
         # ثبت در لاگ سیستم
         db.add_system_log(
@@ -186,27 +193,29 @@ class NotificationManager:
         now = now_jalali()
 
         msg = (
-            f"✅ <b>{message}</b>\n"
+            f"✅ <b>{_esc(str(message))}</b>\n"
             f"🕒 {format_jalali_datetime(now)}\n"
         )
 
         if user_id:
             user = db.get_user(user_id)
             if user:
-                msg += f"👤 کاربر: {user['name']}\n"
+                msg += f"👤 کاربر: {_esc(str(user['name']))}\n"
 
         if channel_id:
             ch = db.get_channel(channel_id)
             if ch:
-                msg += f"📡 کانال مبدأ: @{ch['username']}\n"
+                msg += f"📡 کانال مبدأ: @{_esc(str(ch['username']))}\n"
 
         if destination_id:
             dest = db.get_destination(destination_id)
             if dest:
-                msg += f"🎯 کانال مقصد: {dest['title'] or dest['chat_id']}\n"
+                msg += f"🎯 کانال مقصد: {_esc(str(dest['title'] or dest['chat_id']))}\n"
 
         if post_link:
-            msg += f"🔗 <a href='{post_link}'>مشاهده پست</a>"
+            # post_link همیشه توسطِ خودِ کد (poster._build_post_link) ساخته می‌شه،
+            # نه ورودیِ خارجی؛ ولی escape چیزی رو خراب نمی‌کنه و ایمن‌تره.
+            msg += f"🔗 <a href='{_esc(str(post_link))}'>مشاهده پست</a>"
 
         if post_id:
             msg += f"📨 پست: {post_id}"
@@ -239,7 +248,7 @@ class NotificationManager:
         now = now_jalali()
 
         msg = (
-            f"⚠️ <b>هشدار: {warning_type}</b>\n"
+            f"⚠️ <b>هشدار: {_esc(str(warning_type))}</b>\n"
             f"🕒 {format_jalali_datetime(now)}\n"
             f"─────────────────\n"
         )
@@ -247,10 +256,10 @@ class NotificationManager:
         if user_id:
             user = db.get_user(user_id)
             if user:
-                msg += f"👤 کاربر: {user['name']}\n"
+                msg += f"👤 کاربر: {_esc(str(user['name']))}\n"
 
         for key, value in details.items():
-            msg += f"• {key}: {value}\n"
+            msg += f"• {_esc(str(key))}: {_esc(str(value))}\n"
 
         db.add_system_log(
             log_type="NOTIFICATION",

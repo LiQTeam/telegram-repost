@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from html.parser import HTMLParser
 from typing import Optional, Union
@@ -442,3 +443,153 @@ def get_mime_type(filename: str) -> str:
         "js": "application/javascript",
     }
     return mime_map.get(ext, "application/octet-stream")
+
+def format_log_entry(log_row) -> str:
+    """
+    یک ردیفِ system_logs رو برای نمایش توی تلگرام (HTML) فرمت می‌کنه.
+    علاوه بر پیام، این‌ها رو هم نشون می‌ده تا معلوم بشه دقیقاً «داشته چیکار
+    می‌کرده» که این ارور به‌وجود اومده:
+    - نوعِ عملیات (log_type) + شناسه‌ی کانال/مقصد/کاربر/پستِ مرتبط (اگه بود)
+    - هر پارامترِ دیگه‌ای که خودِ همون بخش از کد موقعِ ثبتِ لاگ فرستاده
+      (مثلاً task_type، طولِ متن، آخرین خطای Provider و ...)
+    و برای لاگ‌های ERROR/WARNING که details._debug دارن (نگاه کن به
+    Database.add_system_log)، مشخصاتِ فنیِ منشأِ خطا (فایل/خط/تابع + نوعِ
+    استثنا) رو هم زیرِ همه اضافه می‌کنه تا دیباگ بدونِ نیاز به لاگِ خامِ
+    سرور ممکن باشه.
+    """
+    import html as _html
+
+    # برچسبِ فارسیِ نوعِ عملیات، فقط برای خواناتر شدن (اگه log_type ناشناخته
+    # بود، خودِ کدِ خامش نمایش داده می‌شه - چیزی گم نمی‌شه)
+    _OP_LABELS = {
+        "AI": "پردازشِ هوش مصنوعی",
+        "MEDIA": "پردازشِ رسانه",
+        "POST": "ارسال/پردازشِ پست",
+        "NOTIFICATION": "اعلان‌رسانی",
+        "AD_FILTER": "فیلترِ تبلیغات",
+        "DUPLICATE": "تشخیصِ محتوایِ تکراری",
+        "IMAGE_GEN": "تولیدِ تصویر با هوش مصنوعی",
+        "MONITOR": "مانیتورینگِ منابعِ سرور",
+    }
+
+    severity = log_row["severity"] if "severity" in log_row.keys() else ""
+    icon = {"ERROR": "🔴", "WARNING": "🟠", "INFO": "🟢"}.get(severity, "📌")
+
+    message = log_row["message"] or ""
+    message_short = message if len(message) <= 200 else message[:200] + "…"
+
+    lines = [
+        f"🕒 {log_row['jalali_date']}",
+        f"{icon} {_html.escape(log_row['event_type'])}",
+        f"📝 {_html.escape(message_short)}",
+    ]
+
+    # «داشته چیکار می‌کرده» - نوعِ عملیات + رویِ کدوم کانال/پست/کاربر
+    keys = log_row.keys()
+    op_label = _OP_LABELS.get(log_row["log_type"], log_row["log_type"]) if "log_type" in keys else None
+    target_bits = []
+    if "channel_id" in keys and log_row["channel_id"]:
+        target_bits.append(f"کانالِ مبدأ {log_row['channel_id']}")
+    if "destination_id" in keys and log_row["destination_id"]:
+        target_bits.append(f"کانالِ مقصد {log_row['destination_id']}")
+    if "post_id" in keys and log_row["post_id"]:
+        target_bits.append(f"پستِ {log_row['post_id']}")
+    if "user_id" in keys and log_row["user_id"]:
+        target_bits.append(f"کاربرِ {log_row['user_id']}")
+    op_line_bits = []
+    if op_label:
+        op_line_bits.append(f"عملیات: {op_label}")
+    if target_bits:
+        op_line_bits.append("روی " + "، ".join(target_bits))
+    if "status" in keys and log_row["status"]:
+        op_line_bits.append(f"(نتیجه: {log_row['status']})")
+    if op_line_bits:
+        lines.append("🎬 " + _html.escape(" — ".join(op_line_bits)))
+
+    details_raw = log_row["details"] if "details" in keys else None
+    details = None
+    if details_raw:
+        try:
+            details = json.loads(details_raw)
+        except Exception:
+            details = None
+
+    if isinstance(details, dict):
+        # پارامترهایی که خودِ همون بخش از کد موقعِ ثبتِ ارور فرستاده (هر چیزی
+        # جز _debug که داخلی و فنیه) - این‌ها دقیقاً می‌گن ورودی/وضعیتِ
+        # عملیاتی که خطا داد چی بوده (مثلاً task_type، طولِ متن، پرامپت،
+        # آخرین خطای هر Provider و ...)
+        extra = {k: v for k, v in details.items() if k != "_debug"}
+        if extra:
+            param_bits = []
+            for k, v in extra.items():
+                v_str = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+                if len(v_str) > 90:
+                    v_str = v_str[:90] + "…"
+                param_bits.append(f"{k}={v_str}")
+            params_line = " | ".join(param_bits)
+            if len(params_line) > 300:
+                params_line = params_line[:300] + "…"
+            lines.append("🧩 پارامترهای عملیات: " + _html.escape(params_line))
+
+        debug = details.get("_debug")
+        if debug:
+            loc_bits = []
+            if debug.get("caller_file"):
+                loc_bits.append(f"{debug['caller_file']}:{debug.get('caller_line', '?')}")
+            if debug.get("caller_function"):
+                loc_bits.append(f"در {debug['caller_function']}()")
+            if loc_bits:
+                lines.append("📂 منشأ: " + _html.escape(" ".join(loc_bits)))
+
+            if debug.get("exception_type"):
+                exc_line = f"⚠️ {debug['exception_type']}"
+                if debug.get("exception_message"):
+                    exc_line += f": {debug['exception_message']}"
+                lines.append(_html.escape(exc_line))
+
+            if debug.get("origin_file"):
+                origin = f"🎯 محلِ دقیقِ خطا: {debug['origin_file']}:{debug.get('origin_line', '?')}"
+                if debug.get("origin_function"):
+                    origin += f" در {debug['origin_function']}()"
+                lines.append(_html.escape(origin))
+                if debug.get("origin_code"):
+                    lines.append(f"<code>{_html.escape(debug['origin_code'])}</code>")
+
+    return "\n".join(lines)
+
+
+# محدودیتِ واقعیِ تلگرام برایِ متنِ پیام؛ کمی پایین‌تر می‌گیریم که جا برایِ
+# هدر و کیبورد هم بمونه و ریسکِ رد شدن از حد صفر بشه.
+_TELEGRAM_SAFE_TEXT_LIMIT = 3800
+
+
+def build_logs_message(header: str, logs, limit: int = 20) -> str:
+    """
+    هدر + فرمتِ چندتا ردیفِ system_logs رو می‌سازه، ولی برخلافِ یک لوپِ ساده،
+    تضمین می‌کنه که طولِ نهایی هیچ‌وقت از حدِ مجازِ پیامِ تلگرام (۴۰۹۶ کاراکتر)
+    رد نشه؛ چون با جزئیاتِ فنیِ ارورها (فایل/خط/exception/پارامترها)، چند تا
+    لاگِ طولانی می‌تونن به‌راحتی از این حد رد بشن و باعثِ کرش‌شدنِ منو با
+    خطای MESSAGE_TOO_LONG بشن. اگه همه جا نشن، به‌جاش می‌گه چندتا مورد جا
+    مونده تا کاربر با فیلترِ دقیق‌تر (کانال/کاربر خاص) بقیه رو ببینه.
+    """
+    parts = [header]
+    total_len = len(header)
+    shown = 0
+    logs_slice = list(logs[:limit])
+
+    for log_row in logs_slice:
+        entry = format_log_entry(log_row)
+        # +2 برایِ فاصله‌ی "\n\n" بینِ بخش‌ها
+        added_len = len(entry) + 2
+        if shown > 0 and (total_len + added_len) > _TELEGRAM_SAFE_TEXT_LIMIT:
+            break
+        parts.append(entry)
+        total_len += added_len
+        shown += 1
+
+    remaining = len(logs_slice) - shown
+    if remaining > 0:
+        parts.append(f"… و {remaining} موردِ دیگر (برایِ دیدن، از فیلترِ کانال/کاربر/مقصد استفاده کن)")
+
+    return "\n\n".join(parts)

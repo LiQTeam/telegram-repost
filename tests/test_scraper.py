@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-import _harness
-import asyncio, time
+import _harness  # noqa: F401 - بسته‌ی سبکِ bot را می‌سازد (اثرِ جانبی)
+import asyncio
 import bot.scraper as S
 
 fails = []
